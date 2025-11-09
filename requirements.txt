@@ -1,0 +1,16 @@
+# Ecobee Temperature Management Service Dependencies
+
+# HTTP requests
+requests>=2.31.0
+
+# Timezone support
+pytz>=2024.1
+
+# Web framework for health endpoint
+Flask>=3.0.0
+
+# Werkzeug (Flask dependency, pinned for compatibility)
+Werkzeug>=3.0.0
+
+# Legacy dependencies (web scraper - not used by service)
+selenium>=4.15.0

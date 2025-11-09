@@ -1,0 +1,55 @@
+{
+  "timezone": "America/Chicago",
+  "default_temperature": 68,
+  "schedule": {
+    "monday": [
+      {"time": "00:00", "temperature": 65},
+      {"time": "06:00", "temperature": 68},
+      {"time": "09:00", "temperature": 68},
+      {"time": "17:00", "temperature": 68},
+      {"time": "22:00", "temperature": 67}
+    ],
+    "tuesday": [
+      {"time": "00:00", "temperature": 65},
+      {"time": "06:00", "temperature": 68},
+      {"time": "09:00", "temperature": 68},
+      {"time": "17:00", "temperature": 68},
+      {"time": "22:00", "temperature": 67}
+    ],
+    "wednesday": [
+      {"time": "00:00", "temperature": 65},
+      {"time": "06:00", "temperature": 68},
+      {"time": "09:00", "temperature": 68},
+      {"time": "17:00", "temperature": 68},
+      {"time": "22:00", "temperature": 67}
+    ],
+    "thursday": [
+      {"time": "00:00", "temperature": 65},
+      {"time": "06:00", "temperature": 68},
+      {"time": "09:00", "temperature": 68},
+      {"time": "17:00", "temperature": 68},
+      {"time": "22:00", "temperature": 67}
+    ],
+    "friday": [
+      {"time": "00:00", "temperature": 65},
+      {"time": "06:00", "temperature": 68},
+      {"time": "09:00", "temperature": 68},
+      {"time": "17:00", "temperature": 68},
+      {"time": "22:00", "temperature": 67}
+    ],
+    "saturday": [
+      {"time": "00:00", "temperature": 65},
+      {"time": "06:00", "temperature": 68},
+      {"time": "09:00", "temperature": 68},
+      {"time": "17:00", "temperature": 68},
+      {"time": "22:00", "temperature": 65}
+    ],
+    "sunday": [
+      {"time": "00:00", "temperature": 65},
+      {"time": "06:00", "temperature": 68},
+      {"time": "09:00", "temperature": 68},
+      {"time": "17:00", "temperature": 68},
+      {"time": "22:00", "temperature": 65}
+    ]
+  }
+}
