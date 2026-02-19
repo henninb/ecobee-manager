@@ -23,13 +23,16 @@ COPY ecobee_auth_jwt.py .
 COPY ecobee_service.py .
 COPY health_server.py .
 COPY schedule_engine.py .
+COPY secrets_loader.py .
 COPY temperature_controller.py .
 
-# Create necessary directories and placeholder for JWT token
-RUN mkdir -p config logs && touch ecobee_jwt.json
+# Create non-root user
+RUN groupadd -r ecobee && useradd -r -g ecobee -d /app -s /sbin/nologin ecobee
 
-# Copy configuration if exists (optional - can be mounted)
-COPY config/ config/ 2>/dev/null || true
+# Create necessary directories and placeholder for JWT token
+RUN mkdir -p config logs && touch ecobee_jwt.json && chown -R ecobee:ecobee /app
+
+USER ecobee
 
 # Set environment variables (defaults)
 ENV CHECK_INTERVAL_MINUTES=45
