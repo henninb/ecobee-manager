@@ -1,55 +1,692 @@
 {
   "timezone": "America/Chicago",
-  "default_temperature": 68,
+  "default_temperature": 67,
   "schedule": {
     "monday": [
-      {"time": "00:00", "temperature": 65},
-      {"time": "06:00", "temperature": 68},
-      {"time": "09:00", "temperature": 68},
-      {"time": "17:00", "temperature": 68},
-      {"time": "22:00", "temperature": 67}
+      {
+        "time": "00:00",
+        "temperature": 67
+      },
+      {
+        "time": "01:00",
+        "temperature": 67
+      },
+      {
+        "time": "02:00",
+        "temperature": 67
+      },
+      {
+        "time": "03:00",
+        "temperature": 67
+      },
+      {
+        "time": "04:00",
+        "temperature": 67
+      },
+      {
+        "time": "05:00",
+        "temperature": 67
+      },
+      {
+        "time": "06:00",
+        "temperature": 67
+      },
+      {
+        "time": "07:00",
+        "temperature": 67
+      },
+      {
+        "time": "08:00",
+        "temperature": 67
+      },
+      {
+        "time": "09:00",
+        "temperature": 67
+      },
+      {
+        "time": "10:00",
+        "temperature": 67
+      },
+      {
+        "time": "11:00",
+        "temperature": 67
+      },
+      {
+        "time": "12:00",
+        "temperature": 67
+      },
+      {
+        "time": "13:00",
+        "temperature": 67
+      },
+      {
+        "time": "14:00",
+        "temperature": 67
+      },
+      {
+        "time": "15:00",
+        "temperature": 67
+      },
+      {
+        "time": "16:00",
+        "temperature": 67
+      },
+      {
+        "time": "17:00",
+        "temperature": 67
+      },
+      {
+        "time": "18:00",
+        "temperature": 67
+      },
+      {
+        "time": "19:00",
+        "temperature": 67
+      },
+      {
+        "time": "20:00",
+        "temperature": 67
+      },
+      {
+        "time": "21:00",
+        "temperature": 67
+      },
+      {
+        "time": "22:00",
+        "temperature": 67
+      },
+      {
+        "time": "23:00",
+        "temperature": 67
+      }
     ],
     "tuesday": [
-      {"time": "00:00", "temperature": 65},
-      {"time": "06:00", "temperature": 68},
-      {"time": "09:00", "temperature": 68},
-      {"time": "17:00", "temperature": 68},
-      {"time": "22:00", "temperature": 67}
+      {
+        "time": "00:00",
+        "temperature": 67
+      },
+      {
+        "time": "01:00",
+        "temperature": 67
+      },
+      {
+        "time": "02:00",
+        "temperature": 67
+      },
+      {
+        "time": "03:00",
+        "temperature": 67
+      },
+      {
+        "time": "04:00",
+        "temperature": 67
+      },
+      {
+        "time": "05:00",
+        "temperature": 67
+      },
+      {
+        "time": "06:00",
+        "temperature": 67
+      },
+      {
+        "time": "07:00",
+        "temperature": 67
+      },
+      {
+        "time": "08:00",
+        "temperature": 67
+      },
+      {
+        "time": "09:00",
+        "temperature": 67
+      },
+      {
+        "time": "10:00",
+        "temperature": 67
+      },
+      {
+        "time": "11:00",
+        "temperature": 67
+      },
+      {
+        "time": "12:00",
+        "temperature": 67
+      },
+      {
+        "time": "13:00",
+        "temperature": 67
+      },
+      {
+        "time": "14:00",
+        "temperature": 67
+      },
+      {
+        "time": "15:00",
+        "temperature": 67
+      },
+      {
+        "time": "16:00",
+        "temperature": 67
+      },
+      {
+        "time": "17:00",
+        "temperature": 67
+      },
+      {
+        "time": "18:00",
+        "temperature": 67
+      },
+      {
+        "time": "19:00",
+        "temperature": 67
+      },
+      {
+        "time": "20:00",
+        "temperature": 67
+      },
+      {
+        "time": "21:00",
+        "temperature": 67
+      },
+      {
+        "time": "22:00",
+        "temperature": 67
+      },
+      {
+        "time": "23:00",
+        "temperature": 67
+      }
     ],
     "wednesday": [
-      {"time": "00:00", "temperature": 65},
-      {"time": "06:00", "temperature": 68},
-      {"time": "09:00", "temperature": 68},
-      {"time": "17:00", "temperature": 68},
-      {"time": "22:00", "temperature": 67}
+      {
+        "time": "00:00",
+        "temperature": 67
+      },
+      {
+        "time": "01:00",
+        "temperature": 67
+      },
+      {
+        "time": "02:00",
+        "temperature": 67
+      },
+      {
+        "time": "03:00",
+        "temperature": 67
+      },
+      {
+        "time": "04:00",
+        "temperature": 67
+      },
+      {
+        "time": "05:00",
+        "temperature": 67
+      },
+      {
+        "time": "06:00",
+        "temperature": 67
+      },
+      {
+        "time": "07:00",
+        "temperature": 67
+      },
+      {
+        "time": "08:00",
+        "temperature": 67
+      },
+      {
+        "time": "09:00",
+        "temperature": 67
+      },
+      {
+        "time": "10:00",
+        "temperature": 67
+      },
+      {
+        "time": "11:00",
+        "temperature": 67
+      },
+      {
+        "time": "12:00",
+        "temperature": 67
+      },
+      {
+        "time": "13:00",
+        "temperature": 67
+      },
+      {
+        "time": "14:00",
+        "temperature": 67
+      },
+      {
+        "time": "15:00",
+        "temperature": 67
+      },
+      {
+        "time": "16:00",
+        "temperature": 67
+      },
+      {
+        "time": "17:00",
+        "temperature": 67
+      },
+      {
+        "time": "18:00",
+        "temperature": 67
+      },
+      {
+        "time": "19:00",
+        "temperature": 67
+      },
+      {
+        "time": "20:00",
+        "temperature": 67
+      },
+      {
+        "time": "21:00",
+        "temperature": 67
+      },
+      {
+        "time": "22:00",
+        "temperature": 67
+      },
+      {
+        "time": "23:00",
+        "temperature": 67
+      }
     ],
     "thursday": [
-      {"time": "00:00", "temperature": 65},
-      {"time": "06:00", "temperature": 68},
-      {"time": "09:00", "temperature": 68},
-      {"time": "17:00", "temperature": 68},
-      {"time": "22:00", "temperature": 67}
+      {
+        "time": "00:00",
+        "temperature": 67
+      },
+      {
+        "time": "01:00",
+        "temperature": 67
+      },
+      {
+        "time": "02:00",
+        "temperature": 67
+      },
+      {
+        "time": "03:00",
+        "temperature": 67
+      },
+      {
+        "time": "04:00",
+        "temperature": 67
+      },
+      {
+        "time": "05:00",
+        "temperature": 67
+      },
+      {
+        "time": "06:00",
+        "temperature": 67
+      },
+      {
+        "time": "07:00",
+        "temperature": 67
+      },
+      {
+        "time": "08:00",
+        "temperature": 67
+      },
+      {
+        "time": "09:00",
+        "temperature": 67
+      },
+      {
+        "time": "10:00",
+        "temperature": 67
+      },
+      {
+        "time": "11:00",
+        "temperature": 67
+      },
+      {
+        "time": "12:00",
+        "temperature": 67
+      },
+      {
+        "time": "13:00",
+        "temperature": 67
+      },
+      {
+        "time": "14:00",
+        "temperature": 67
+      },
+      {
+        "time": "15:00",
+        "temperature": 67
+      },
+      {
+        "time": "16:00",
+        "temperature": 67
+      },
+      {
+        "time": "17:00",
+        "temperature": 67
+      },
+      {
+        "time": "18:00",
+        "temperature": 67
+      },
+      {
+        "time": "19:00",
+        "temperature": 67
+      },
+      {
+        "time": "20:00",
+        "temperature": 67
+      },
+      {
+        "time": "21:00",
+        "temperature": 67
+      },
+      {
+        "time": "22:00",
+        "temperature": 67
+      },
+      {
+        "time": "23:00",
+        "temperature": 67
+      }
     ],
     "friday": [
-      {"time": "00:00", "temperature": 65},
-      {"time": "06:00", "temperature": 68},
-      {"time": "09:00", "temperature": 68},
-      {"time": "17:00", "temperature": 68},
-      {"time": "22:00", "temperature": 67}
+      {
+        "time": "00:00",
+        "temperature": 67
+      },
+      {
+        "time": "01:00",
+        "temperature": 67
+      },
+      {
+        "time": "02:00",
+        "temperature": 67
+      },
+      {
+        "time": "03:00",
+        "temperature": 67
+      },
+      {
+        "time": "04:00",
+        "temperature": 67
+      },
+      {
+        "time": "05:00",
+        "temperature": 67
+      },
+      {
+        "time": "06:00",
+        "temperature": 67
+      },
+      {
+        "time": "07:00",
+        "temperature": 67
+      },
+      {
+        "time": "08:00",
+        "temperature": 67
+      },
+      {
+        "time": "09:00",
+        "temperature": 67
+      },
+      {
+        "time": "10:00",
+        "temperature": 67
+      },
+      {
+        "time": "11:00",
+        "temperature": 67
+      },
+      {
+        "time": "12:00",
+        "temperature": 67
+      },
+      {
+        "time": "13:00",
+        "temperature": 67
+      },
+      {
+        "time": "14:00",
+        "temperature": 67
+      },
+      {
+        "time": "15:00",
+        "temperature": 67
+      },
+      {
+        "time": "16:00",
+        "temperature": 67
+      },
+      {
+        "time": "17:00",
+        "temperature": 67
+      },
+      {
+        "time": "18:00",
+        "temperature": 67
+      },
+      {
+        "time": "19:00",
+        "temperature": 67
+      },
+      {
+        "time": "20:00",
+        "temperature": 67
+      },
+      {
+        "time": "21:00",
+        "temperature": 67
+      },
+      {
+        "time": "22:00",
+        "temperature": 67
+      },
+      {
+        "time": "23:00",
+        "temperature": 67
+      }
     ],
     "saturday": [
-      {"time": "00:00", "temperature": 65},
-      {"time": "06:00", "temperature": 68},
-      {"time": "09:00", "temperature": 68},
-      {"time": "17:00", "temperature": 68},
-      {"time": "22:00", "temperature": 65}
+      {
+        "time": "00:00",
+        "temperature": 67
+      },
+      {
+        "time": "01:00",
+        "temperature": 67
+      },
+      {
+        "time": "02:00",
+        "temperature": 67
+      },
+      {
+        "time": "03:00",
+        "temperature": 67
+      },
+      {
+        "time": "04:00",
+        "temperature": 67
+      },
+      {
+        "time": "05:00",
+        "temperature": 67
+      },
+      {
+        "time": "06:00",
+        "temperature": 67
+      },
+      {
+        "time": "07:00",
+        "temperature": 67
+      },
+      {
+        "time": "08:00",
+        "temperature": 67
+      },
+      {
+        "time": "09:00",
+        "temperature": 67
+      },
+      {
+        "time": "10:00",
+        "temperature": 67
+      },
+      {
+        "time": "11:00",
+        "temperature": 67
+      },
+      {
+        "time": "12:00",
+        "temperature": 67
+      },
+      {
+        "time": "13:00",
+        "temperature": 67
+      },
+      {
+        "time": "14:00",
+        "temperature": 67
+      },
+      {
+        "time": "15:00",
+        "temperature": 67
+      },
+      {
+        "time": "16:00",
+        "temperature": 67
+      },
+      {
+        "time": "17:00",
+        "temperature": 67
+      },
+      {
+        "time": "18:00",
+        "temperature": 67
+      },
+      {
+        "time": "19:00",
+        "temperature": 67
+      },
+      {
+        "time": "20:00",
+        "temperature": 67
+      },
+      {
+        "time": "21:00",
+        "temperature": 67
+      },
+      {
+        "time": "22:00",
+        "temperature": 67
+      },
+      {
+        "time": "23:00",
+        "temperature": 67
+      }
     ],
     "sunday": [
-      {"time": "00:00", "temperature": 65},
-      {"time": "06:00", "temperature": 68},
-      {"time": "09:00", "temperature": 68},
-      {"time": "17:00", "temperature": 68},
-      {"time": "22:00", "temperature": 65}
+      {
+        "time": "00:00",
+        "temperature": 67
+      },
+      {
+        "time": "01:00",
+        "temperature": 67
+      },
+      {
+        "time": "02:00",
+        "temperature": 67
+      },
+      {
+        "time": "03:00",
+        "temperature": 67
+      },
+      {
+        "time": "04:00",
+        "temperature": 67
+      },
+      {
+        "time": "05:00",
+        "temperature": 67
+      },
+      {
+        "time": "06:00",
+        "temperature": 67
+      },
+      {
+        "time": "07:00",
+        "temperature": 67
+      },
+      {
+        "time": "08:00",
+        "temperature": 67
+      },
+      {
+        "time": "09:00",
+        "temperature": 67
+      },
+      {
+        "time": "10:00",
+        "temperature": 67
+      },
+      {
+        "time": "11:00",
+        "temperature": 67
+      },
+      {
+        "time": "12:00",
+        "temperature": 67
+      },
+      {
+        "time": "13:00",
+        "temperature": 67
+      },
+      {
+        "time": "14:00",
+        "temperature": 67
+      },
+      {
+        "time": "15:00",
+        "temperature": 67
+      },
+      {
+        "time": "16:00",
+        "temperature": 67
+      },
+      {
+        "time": "17:00",
+        "temperature": 67
+      },
+      {
+        "time": "18:00",
+        "temperature": 67
+      },
+      {
+        "time": "19:00",
+        "temperature": 67
+      },
+      {
+        "time": "20:00",
+        "temperature": 67
+      },
+      {
+        "time": "21:00",
+        "temperature": 67
+      },
+      {
+        "time": "22:00",
+        "temperature": 67
+      },
+      {
+        "time": "23:00",
+        "temperature": 67
+      }
     ]
   }
 }

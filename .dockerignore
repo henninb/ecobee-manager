@@ -25,7 +25,7 @@ build
 logs/*.log
 
 # Data files (should be mounted as volumes)
-data/.ecobee_jwt.json
+ecobee_jwt.json
 
 # Environment files
 .env

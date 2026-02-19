@@ -6,7 +6,7 @@ Handles parsing and lookup of temperature schedules
 
 import json
 import logging
-from datetime import datetime, time
+from datetime import datetime, time as dt_time
 from typing import Optional, Dict, List
 from pathlib import Path
 import pytz
@@ -79,6 +79,17 @@ class ScheduleEngine:
                 # Sort entries by time
                 parsed_entries.sort(key=lambda x: x.time)
                 self.schedule[day_lower] = parsed_entries
+
+            # Fill in any missing hourly entries and save back to file if any were added
+            any_filled = False
+            for day_name in list(self.schedule.keys()):
+                filled = self._fill_missing_hours(day_name, self.schedule[day_name])
+                if len(filled) != len(self.schedule[day_name]):
+                    any_filled = True
+                self.schedule[day_name] = filled
+
+            if any_filled:
+                self._save_schedule(data)
 
             self.last_modified = Path(self.schedule_file).stat().st_mtime
             logger.info(f"Loaded schedule from {self.schedule_file}")
@@ -179,6 +190,54 @@ class ScheduleEngine:
             ]
 
         return summary
+
+    def _save_schedule(self, original_data: dict):
+        """Write the current in-memory schedule back to the JSON file"""
+        original_data['schedule'] = {
+            day: [
+                {'time': entry.time.strftime('%H:%M'), 'temperature': entry.temperature}
+                for entry in entries
+            ]
+            for day, entries in self.schedule.items()
+        }
+        try:
+            with open(self.schedule_file, 'w') as f:
+                json.dump(original_data, f, indent=2)
+            logger.info(f"Saved updated schedule to {self.schedule_file}")
+        except Exception as e:
+            logger.error(f"Error saving schedule: {e}")
+
+    def _fill_missing_hours(self, day_name: str, entries: List[ScheduleEntry]) -> List[ScheduleEntry]:
+        """Fill in missing HH:00 entries by carrying forward the last known temperature"""
+        entry_hours = {e.time.hour for e in entries if e.time.minute == 0}
+        missing = [h for h in range(24) if h not in entry_hours]
+
+        if not missing:
+            return entries
+
+        filled = list(entries)
+        for hour in missing:
+            target_time = datetime.strptime(f"{hour:02d}:00", "%H:%M").time()
+
+            # Find the last entry at or before this hour
+            applicable = None
+            for entry in entries:  # already sorted
+                if entry.time <= target_time:
+                    applicable = entry
+                else:
+                    break
+
+            if applicable:
+                temp = applicable.temperature
+            else:
+                # No entry before this hour — carry from previous day
+                temp = self._get_last_temperature_from_previous_day(day_name) or self.default_temperature
+
+            filled.append(ScheduleEntry(f"{hour:02d}:00", temp))
+            logger.info(f"Auto-filled missing entry for {day_name} at {hour:02d}:00: {temp}°F")
+
+        filled.sort(key=lambda x: x.time)
+        return filled
 
     def validate_schedule(self) -> List[str]:
         """Validate the schedule and return list of warnings/errors"""

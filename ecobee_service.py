@@ -33,7 +33,7 @@ class EcobeeServiceJWT:
         self.health_server = None
 
         # Configuration
-        self.check_interval_minutes = int(os.environ.get('CHECK_INTERVAL_MINUTES', 10))
+        self.check_interval_minutes = int(os.environ.get('CHECK_INTERVAL_MINUTES', 45))
         self.log_level = os.environ.get('LOG_LEVEL', 'INFO')
 
         # Error tracking
@@ -95,6 +95,10 @@ class EcobeeServiceJWT:
         """Initialize all service components"""
         self.logger.info("Initializing Ecobee Temperature Management Service (JWT)...")
 
+        # Load credentials from env.secrets.enc (SOPS) or env.secrets
+        from secrets_loader import load_secrets
+        load_secrets()
+
         # Get credentials
         self.email = os.environ.get('ECOBEE_EMAIL')
         self.password = os.environ.get('ECOBEE_PASSWORD')
@@ -105,7 +109,7 @@ class EcobeeServiceJWT:
 
         # Initialize JWT authentication
         self.logger.info("Initializing JWT authentication...")
-        self.auth = EcobeeAuthJWT(self.email, self.password, config_file="data/.ecobee_jwt.json")
+        self.auth = EcobeeAuthJWT(self.email, self.password, config_file="ecobee_jwt.json")
 
         # Try to load existing token
         if self.auth.load_token():
@@ -148,6 +152,9 @@ class EcobeeServiceJWT:
         self.controller = TemperatureController(token)
         self.logger.info("Temperature controller initialized")
 
+        # Apply alternating sleep/smart1 program to Ecobee for all 24 hours
+        self._apply_ecobee_program()
+
         # Initialize health server
         self.logger.info("Initializing health server...")
         self.health_server = HealthServer(port=8080)
@@ -163,13 +170,25 @@ class EcobeeServiceJWT:
         self.logger.info("All components initialized successfully")
         return True
 
+    def _apply_ecobee_program(self):
+        """Push the alternating sleep/smart1 program to the Ecobee for all 24 hours."""
+        self.logger.info("Applying alternating sleep/smart1 schedule to Ecobee program...")
+        if self.controller.update_night_schedule(
+            temp=67, climate_ref="sleep", alt_climate_ref="smart1",
+            start_hour=0, end_hour=0
+        ):
+            self.logger.info("Ecobee program updated successfully")
+        else:
+            self.logger.warning("Failed to apply Ecobee program update")
+
     def check_and_update_temperature(self):
         """Main temperature check and update logic"""
         try:
             self.logger.debug("Starting temperature check...")
 
             # Check for schedule updates
-            self.schedule.check_for_updates()
+            if self.schedule.check_for_updates():
+                self._apply_ecobee_program()
 
             # Get expected temperature from schedule
             expected_temp = self.schedule.get_expected_temperature()

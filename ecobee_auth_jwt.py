@@ -4,8 +4,10 @@ ecobee JWT Authentication Module
 Uses Selenium to login and extract JWT token from _TOKEN cookie
 """
 
+import base64
 import json
 import os
+import re
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -26,7 +28,7 @@ class EcobeeAuthJWT:
     TOKEN_LIFETIME = 3600  # 1 hour in seconds
     REFRESH_BUFFER = 300   # Refresh 5 minutes before expiry
 
-    def __init__(self, email: str, password: str, config_file: str = "data/.ecobee_jwt.json"):
+    def __init__(self, email: str, password: str, config_file: str = "ecobee_jwt.json"):
         self.email = email
         self.password = password
         self.config_file = config_file
@@ -34,10 +36,31 @@ class EcobeeAuthJWT:
         self.token_expires_at = None
         self.last_refreshed = None
         self.driver = None
+        self.api_base_url = None
 
         # Configurable timeout for Selenium operations (useful for slower networks)
         self.selenium_timeout = int(os.getenv('SELENIUM_TIMEOUT', '30'))  # Default 30s
         self.selenium_redirect_timeout = int(os.getenv('SELENIUM_REDIRECT_TIMEOUT', '60'))  # Default 60s for redirects
+
+    def _parse_jwt_timestamps(self, token: str):
+        """
+        Decode the JWT payload and return (expires_at, issued_at) as UTC datetimes.
+        Falls back to (now + TOKEN_LIFETIME, now) if the token cannot be parsed.
+        """
+        try:
+            payload_b64 = token.split('.')[1]
+            payload_b64 += '=' * (4 - len(payload_b64) % 4)
+            payload = json.loads(base64.b64decode(payload_b64))
+            now = datetime.now(timezone.utc)
+            exp = payload.get('exp')
+            iat = payload.get('iat')
+            expires_at = datetime.fromtimestamp(exp, tz=timezone.utc) if exp else now + timedelta(seconds=self.TOKEN_LIFETIME)
+            issued_at = datetime.fromtimestamp(iat, tz=timezone.utc) if iat else now
+            return expires_at, issued_at
+        except Exception as e:
+            logger.warning(f"Could not parse JWT timestamps: {e}")
+            now = datetime.now(timezone.utc)
+            return now + timedelta(seconds=self.TOKEN_LIFETIME), now
 
     def _init_driver(self, headless: bool = True):
         """Initialize Chrome driver"""
@@ -56,6 +79,9 @@ class EcobeeAuthJWT:
         # Disable automation flags
         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
         chrome_options.add_experimental_option('useAutomationExtension', False)
+
+        # Capture network requests so we can extract the real API token
+        chrome_options.set_capability('goog:loggingPrefs', {'performance': 'ALL'})
 
         try:
             self.driver = webdriver.Chrome(options=chrome_options)
@@ -185,13 +211,17 @@ class EcobeeAuthJWT:
                 logger.debug(f"Final URL: {self.driver.current_url}")
                 return False
 
-            # Successfully extracted token
+            # Successfully extracted token — derive timestamps from the JWT claims
             self.jwt_token = token_cookie
-            now = datetime.now(timezone.utc)
-            self.token_expires_at = now + timedelta(seconds=self.TOKEN_LIFETIME)
-            self.last_refreshed = now
+            self.token_expires_at, self.last_refreshed = self._parse_jwt_timestamps(token_cookie)
 
             logger.info(f"Successfully extracted JWT token (expires: {self.token_expires_at})")
+
+            # Wait for the portal app to boot and fire its own API calls,
+            # then capture the real Bearer token and API base URL from those.
+            logger.info("Waiting for portal to load and capture API context...")
+            time.sleep(8)
+            self._capture_api_context_from_logs()
 
             # Save token
             self.save_token()
@@ -213,16 +243,105 @@ class EcobeeAuthJWT:
         finally:
             self._close_driver()
 
+    def _capture_api_context_from_logs(self):
+        """
+        Scan Chrome performance logs and localStorage for Ecobee API context.
+        Extracts the real Bearer token and base URL the web app uses.
+        """
+        # --- 1. Check localStorage for OAuth token ---
+        captured_token = None  # token found in logs/localStorage (may overwrite cookie token)
+        try:
+            ls_raw = self.driver.execute_script("return JSON.stringify(window.localStorage);")
+            ls = json.loads(ls_raw) if ls_raw else {}
+            logger.debug(f"localStorage keys: {list(ls.keys())}")
+            for key, value in ls.items():
+                if not isinstance(value, str):
+                    continue
+                # Look for JWT-shaped values (three base64 segments)
+                if re.match(r'^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$', value.strip()):
+                    logger.info(f"Found JWT-shaped token in localStorage['{key}']")
+                    if not captured_token:
+                        captured_token = value.strip()
+                # Also look for values that contain an access_token JSON blob
+                if 'access_token' in value:
+                    try:
+                        blob = json.loads(value)
+                        tok = blob.get('access_token') or blob.get('body', {}).get('access_token')
+                        if tok:
+                            logger.info(f"Found access_token in localStorage['{key}']")
+                            captured_token = tok
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.warning(f"Could not read localStorage: {e}")
+
+        # --- 2. Scan performance logs for API requests ---
+        try:
+            logs = self.driver.get_log('performance')
+        except Exception as e:
+            logger.warning(f"Could not read performance logs: {e}")
+            logs = []
+
+        ecobee_urls = set()
+        for entry in logs:
+            try:
+                message = json.loads(entry['message'])['message']
+                if message.get('method') != 'Network.requestWillBeSent':
+                    continue
+
+                request = message.get('params', {}).get('request', {})
+                url = request.get('url', '')
+                headers = request.get('headers', {})
+
+                if 'ecobee.com' not in url:
+                    continue
+
+                ecobee_urls.add(url.split('?')[0])
+
+                auth = next(
+                    (v for k, v in headers.items() if k.lower() == 'authorization'),
+                    ''
+                )
+
+                if auth.startswith('Bearer '):
+                    match = re.match(r'(https://[^/]+(?:/api/v\d+|/1))', url)
+                    if match:
+                        self.api_base_url = match.group(1)
+                        self.jwt_token = auth[len('Bearer '):]
+                        self.token_expires_at, self.last_refreshed = self._parse_jwt_timestamps(self.jwt_token)
+                        logger.info(f"Captured API context from network log: {self.api_base_url}")
+                        return
+
+            except Exception:
+                continue
+
+        if ecobee_urls:
+            logger.debug(f"Ecobee URLs seen (no Bearer header): {ecobee_urls}")
+        else:
+            logger.warning("No ecobee.com requests found in performance logs")
+
+        if captured_token:
+            # Got token from localStorage but no base URL from network — use prod endpoint
+            self.jwt_token = captured_token
+            self.token_expires_at, self.last_refreshed = self._parse_jwt_timestamps(captured_token)
+            self.api_base_url = "https://prod.ecobee.com/api/v1"
+            logger.info(f"Using api_base_url={self.api_base_url} with localStorage token")
+        else:
+            logger.warning("Could not capture API context — run with DEBUG logging for details")
+
     def save_token(self):
         """Save JWT token to config file with expiration tracking"""
         config = {
             'jwt_token': self.jwt_token,
             'token_expires_at': self.token_expires_at.isoformat() if self.token_expires_at else None,
-            'last_refreshed': self.last_refreshed.isoformat() if self.last_refreshed else None
+            'last_refreshed': self.last_refreshed.isoformat() if self.last_refreshed else None,
+            'api_base_url': self.api_base_url,
         }
         try:
             # Create data directory if it doesn't exist
-            os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
+            dir_name = os.path.dirname(self.config_file)
+            if dir_name:
+                os.makedirs(dir_name, exist_ok=True)
 
             with open(self.config_file, 'w') as f:
                 json.dump(config, f, indent=2)
@@ -242,6 +361,7 @@ class EcobeeAuthJWT:
                 config = json.load(f)
 
             self.jwt_token = config.get('jwt_token')
+            self.api_base_url = config.get('api_base_url')
 
             # Load expiration times
             if config.get('token_expires_at'):
@@ -250,6 +370,8 @@ class EcobeeAuthJWT:
                 self.last_refreshed = datetime.fromisoformat(config['last_refreshed'])
 
             logger.info(f"Loaded JWT token from {self.config_file}")
+            if self.api_base_url:
+                logger.info(f"Loaded API context: {self.api_base_url}")
             return True
 
         except Exception as e:
@@ -356,6 +478,10 @@ if __name__ == "__main__":
     import sys
 
     logging.basicConfig(level=logging.DEBUG)
+
+    # Load credentials from env.secrets.enc (SOPS) or env.secrets
+    from secrets_loader import load_secrets
+    load_secrets()
 
     email = os.environ.get('ECOBEE_EMAIL')
     password = os.environ.get('ECOBEE_PASSWORD')
