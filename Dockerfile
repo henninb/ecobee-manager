@@ -25,8 +25,8 @@ COPY health_server.py .
 COPY schedule_engine.py .
 COPY temperature_controller.py .
 
-# Create necessary directories
-RUN mkdir -p config data logs
+# Create necessary directories and placeholder for JWT token
+RUN mkdir -p config logs && touch ecobee_jwt.json
 
 # Copy configuration if exists (optional - can be mounted)
 COPY config/ config/ 2>/dev/null || true

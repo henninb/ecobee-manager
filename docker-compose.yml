@@ -7,20 +7,19 @@ services:
       dockerfile: Dockerfile
     container_name: ecobee-temperature-manager
     restart: unless-stopped
+    env_file:
+      - path: ./env.secrets
+        required: true
     environment:
-      # Required credentials
-      - ECOBEE_EMAIL=${ECOBEE_EMAIL}
-      - ECOBEE_PASSWORD=${ECOBEE_PASSWORD}
-
-      # Optional configuration
+      # Optional configuration (override env.secrets values or set defaults)
       - CHECK_INTERVAL_MINUTES=${CHECK_INTERVAL_MINUTES:-45}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - SELENIUM_TIMEOUT=${SELENIUM_TIMEOUT:-30}
       - SELENIUM_REDIRECT_TIMEOUT=${SELENIUM_REDIRECT_TIMEOUT:-60}
 
     volumes:
-      # Persist JWT tokens
-      - ./data:/app/data
+      # Persist JWT token
+      - ./ecobee_jwt.json:/app/ecobee_jwt.json
 
       # Persist logs
       - ./logs:/app/logs

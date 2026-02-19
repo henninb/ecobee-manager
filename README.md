@@ -112,8 +112,6 @@ python ecobee_cli.py schedule-night --dry-run   # preview without applying
 .
 ├── config/
 │   └── schedule.json          # Temperature schedule configuration (auto-filled if gaps exist)
-├── data/
-│   └── screenshots/           # Selenium debug screenshots
 ├── ecobee_jwt.json            # JWT tokens (auto-generated)
 ├── env.secrets                # Plaintext credentials (gitignored)
 ├── env.secrets.enc            # SOPS-encrypted credentials
