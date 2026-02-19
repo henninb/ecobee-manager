@@ -16,6 +16,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 from selenium.common.exceptions import TimeoutException, WebDriverException
 import time
 
@@ -69,10 +70,17 @@ class EcobeeAuthJWT:
 
         chrome_options = Options()
         if headless:
-            chrome_options.add_argument('--headless')
+            chrome_options.add_argument('--headless=new')
             chrome_options.add_argument('--disable-gpu')
         chrome_options.add_argument('--no-sandbox')
+        chrome_options.add_argument('--disable-setuid-sandbox')
         chrome_options.add_argument('--disable-dev-shm-usage')
+        chrome_options.add_argument('--disable-crash-reporter')
+        chrome_options.add_argument('--disable-extensions')
+        chrome_options.add_argument('--no-first-run')
+        chrome_options.add_argument('--no-default-browser-check')
+        chrome_options.add_argument('--disable-default-apps')
+        chrome_options.add_argument('--user-data-dir=/tmp/chromium-user-data')
         chrome_options.add_argument('--disable-blink-features=AutomationControlled')
         chrome_options.add_argument('user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
 
@@ -83,8 +91,18 @@ class EcobeeAuthJWT:
         # Capture network requests so we can extract the real API token
         chrome_options.set_capability('goog:loggingPrefs', {'performance': 'ALL'})
 
+        # Use system-installed chromium binary if present (avoids Selenium Manager download)
+        chromium_bin = os.environ.get('CHROMIUM_BIN', '/usr/bin/chromium')
+        chromedriver_bin = os.environ.get('CHROMEDRIVER_BIN', '/usr/bin/chromedriver')
+        if os.path.exists(chromium_bin):
+            chrome_options.binary_location = chromium_bin
+
         try:
-            self.driver = webdriver.Chrome(options=chrome_options)
+            if os.path.exists(chromedriver_bin):
+                service = Service(chromedriver_bin, log_output='/tmp/chromedriver.log')
+            else:
+                service = Service(log_output='/tmp/chromedriver.log')
+            self.driver = webdriver.Chrome(service=service, options=chrome_options)
             self.driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
                 'source': '''
                     Object.defineProperty(navigator, 'webdriver', {
@@ -96,6 +114,11 @@ class EcobeeAuthJWT:
             logger.info("Chrome driver initialized")
         except WebDriverException as e:
             logger.error(f"Failed to initialize Chrome driver: {e}")
+            try:
+                with open('/tmp/chromedriver.log', 'r') as f:
+                    logger.error(f"ChromeDriver log:\n{f.read()}")
+            except Exception:
+                pass
             raise
 
     def _close_driver(self):
