@@ -30,6 +30,7 @@ docker run -d \
   --name "${CONTAINER}" \
   --restart unless-stopped \
   --user "$(id -u):$(id -g)" \
+  -p 8080:8080 \
   --env-file ./env.secrets \
   -e CHECK_INTERVAL_MINUTES="${CHECK_INTERVAL_MINUTES:-45}" \
   -e LOG_LEVEL="${LOG_LEVEL:-INFO}" \

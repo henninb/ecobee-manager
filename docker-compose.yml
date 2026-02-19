@@ -27,9 +27,8 @@ services:
       # Configuration (schedule)
       - ./config:/app/config:ro
 
-    # Optional: expose health check port
-    # ports:
-    #   - "8080:8080"
+    ports:
+      - "8080:8080"
 
     # Health check
     healthcheck:
