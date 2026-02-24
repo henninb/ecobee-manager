@@ -8,6 +8,7 @@ import base64
 import json
 import os
 import re
+import shutil
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -68,6 +69,11 @@ class EcobeeAuthJWT:
         if self.driver:
             return
 
+        # Always start with a clean profile so cached cookies don't skip the login page
+        user_data_dir = '/tmp/chromium-user-data'
+        if os.path.exists(user_data_dir):
+            shutil.rmtree(user_data_dir, ignore_errors=True)
+
         chrome_options = Options()
         if headless:
             chrome_options.add_argument('--headless=new')
@@ -80,7 +86,7 @@ class EcobeeAuthJWT:
         chrome_options.add_argument('--no-first-run')
         chrome_options.add_argument('--no-default-browser-check')
         chrome_options.add_argument('--disable-default-apps')
-        chrome_options.add_argument('--user-data-dir=/tmp/chromium-user-data')
+        chrome_options.add_argument(f'--user-data-dir={user_data_dir}')
         chrome_options.add_argument('--disable-blink-features=AutomationControlled')
         chrome_options.add_argument('user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
 
