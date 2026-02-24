@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Schedule Engine Module
-Handles parsing and lookup of temperature schedules
+Handles parsing and lookup of temperature windows
 """
 
 import json
@@ -14,25 +14,35 @@ import pytz
 logger = logging.getLogger(__name__)
 
 
-class ScheduleEntry:
-    """Represents a single schedule entry"""
+class TimeWindow:
+    """Represents a named time window with a target temperature"""
 
-    def __init__(self, time_str: str, temperature: int):
-        self.time = datetime.strptime(time_str, "%H:%M").time()
+    def __init__(self, name: str, start: str, end: str, temperature: int, enabled: bool = True):
+        self.name = name
+        self.start = datetime.strptime(start, "%H:%M").time()
+        self.end = datetime.strptime(end, "%H:%M").time()
         self.temperature = temperature
+        self.enabled = enabled
+
+    def contains(self, t: dt_time) -> bool:
+        """Return True if time t falls within this window (handles midnight crossing)"""
+        if self.start < self.end:
+            return self.start <= t < self.end
+        else:
+            # Window crosses midnight (e.g. 19:00–06:00)
+            return t >= self.start or t < self.end
 
     def __repr__(self):
-        return f"ScheduleEntry(time={self.time}, temp={self.temperature}°F)"
+        return f"TimeWindow(name={self.name}, {self.start}–{self.end}, {self.temperature}°F, enabled={self.enabled})"
 
 
 class ScheduleEngine:
-    """Manages temperature schedule and lookups"""
+    """Manages temperature windows and lookups"""
 
     def __init__(self, schedule_file: str = "config/schedule.json"):
         self.schedule_file = schedule_file
         self.timezone = None
-        self.default_temperature = 68
-        self.schedule: Dict[str, List[ScheduleEntry]] = {}
+        self.windows: List[TimeWindow] = []
         self.last_modified = None
 
     def load_schedule(self) -> bool:
@@ -53,48 +63,27 @@ class ScheduleEngine:
                 logger.warning(f"Unknown timezone: {tz_str}, using America/Chicago")
                 self.timezone = pytz.timezone('America/Chicago')
 
-            # Load default temperature
-            self.default_temperature = data.get('default_temperature', 68)
-
-            # Load schedule
-            self.schedule = {}
-            schedule_data = data.get('schedule', {})
-
-            for day, entries in schedule_data.items():
-                day_lower = day.lower()
-                if day_lower not in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']:
-                    logger.warning(f"Invalid day in schedule: {day}")
-                    continue
-
-                parsed_entries = []
-                for entry in entries:
-                    try:
-                        time_str = entry['time']
-                        temp = int(entry['temperature'])
-                        parsed_entries.append(ScheduleEntry(time_str, temp))
-                    except (KeyError, ValueError) as e:
-                        logger.warning(f"Invalid schedule entry for {day}: {entry} - {e}")
-                        continue
-
-                # Sort entries by time
-                parsed_entries.sort(key=lambda x: x.time)
-                self.schedule[day_lower] = parsed_entries
-
-            # Fill in any missing hourly entries and save back to file if any were added
-            any_filled = False
-            for day_name in list(self.schedule.keys()):
-                filled = self._fill_missing_hours(day_name, self.schedule[day_name])
-                if len(filled) != len(self.schedule[day_name]):
-                    any_filled = True
-                self.schedule[day_name] = filled
-
-            if any_filled:
-                self._save_schedule(data)
+            # Load windows
+            self.windows = []
+            for entry in data.get('windows', []):
+                try:
+                    self.windows.append(TimeWindow(
+                        name=entry['name'],
+                        start=entry['start'],
+                        end=entry['end'],
+                        temperature=int(entry['temperature']),
+                        enabled=entry.get('enabled', True),
+                    ))
+                except (KeyError, ValueError) as e:
+                    logger.warning(f"Invalid window entry {entry}: {e}")
 
             self.last_modified = Path(self.schedule_file).stat().st_mtime
             logger.info(f"Loaded schedule from {self.schedule_file}")
-            logger.info(f"Timezone: {self.timezone}, Default temp: {self.default_temperature}°F")
-            logger.info(f"Loaded {len(self.schedule)} days of schedules")
+            logger.info(f"Timezone: {self.timezone}")
+            logger.info(f"Loaded {len(self.windows)} window(s)")
+            for w in self.windows:
+                status = "enabled" if w.enabled else "disabled"
+                logger.info(f"  Window '{w.name}': {w.start}–{w.end} @ {w.temperature}°F ({status})")
             return True
 
         except json.JSONDecodeError as e:
@@ -115,157 +104,71 @@ class ScheduleEngine:
             logger.error(f"Error checking schedule updates: {e}")
         return False
 
-    def get_expected_temperature(self, dt: Optional[datetime] = None) -> int:
+    def get_expected_temperature(self, dt: Optional[datetime] = None) -> Optional[int]:
         """
-        Get expected temperature for given datetime
-        If dt is None, uses current time in configured timezone
+        Get expected temperature for the given datetime.
+        Returns the temperature of the first matching enabled window,
+        or None if the current time falls outside all windows.
         """
         if dt is None:
             dt = datetime.now(self.timezone)
         elif dt.tzinfo is None:
-            # Assume naive datetime is in configured timezone
             dt = self.timezone.localize(dt)
 
-        # Get day name
-        day_name = dt.strftime('%A').lower()
-
-        # Get schedule for this day
-        day_schedule = self.schedule.get(day_name, [])
-
-        if not day_schedule:
-            logger.debug(f"No schedule for {day_name}, using default: {self.default_temperature}°F")
-            return self.default_temperature
-
-        # Find the most recent schedule entry before current time
         current_time = dt.time()
-        applicable_entry = None
 
-        for entry in day_schedule:
-            if entry.time <= current_time:
-                applicable_entry = entry
-            else:
-                break  # Entries are sorted, no need to continue
+        for window in self.windows:
+            if window.enabled and window.contains(current_time):
+                logger.debug(f"Time {current_time} matched window '{window.name}': {window.temperature}°F")
+                return window.temperature
 
-        if applicable_entry:
-            logger.debug(f"Found schedule entry for {day_name} at {applicable_entry.time}: {applicable_entry.temperature}°F")
-            return applicable_entry.temperature
-        else:
-            # No entry found before current time, use last entry from previous day
-            previous_day_temp = self._get_last_temperature_from_previous_day(day_name)
-            if previous_day_temp is not None:
-                logger.debug(f"No entry before current time, using previous day's last entry: {previous_day_temp}°F")
-                return previous_day_temp
-            else:
-                logger.debug(f"No previous entry found, using default: {self.default_temperature}°F")
-                return self.default_temperature
-
-    def _get_last_temperature_from_previous_day(self, current_day: str) -> Optional[int]:
-        """Get the last temperature from the previous day's schedule"""
-        days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
-        try:
-            current_idx = days.index(current_day)
-            previous_day = days[(current_idx - 1) % 7]
-
-            previous_schedule = self.schedule.get(previous_day, [])
-            if previous_schedule:
-                return previous_schedule[-1].temperature
-        except (ValueError, IndexError):
-            pass
-
+        logger.debug(f"Time {current_time} is outside all active windows")
         return None
+
+    def get_windows(self) -> List[TimeWindow]:
+        """Return the list of configured windows"""
+        return self.windows
 
     def get_schedule_summary(self) -> Dict:
         """Get a summary of the current schedule"""
-        summary = {
+        return {
             'timezone': str(self.timezone),
-            'default_temperature': self.default_temperature,
-            'days_configured': len(self.schedule),
-            'schedule': {}
-        }
-
-        for day, entries in self.schedule.items():
-            summary['schedule'][day] = [
-                {'time': entry.time.strftime('%H:%M'), 'temperature': entry.temperature}
-                for entry in entries
+            'windows': [
+                {
+                    'name': w.name,
+                    'start': w.start.strftime('%H:%M'),
+                    'end': w.end.strftime('%H:%M'),
+                    'temperature': w.temperature,
+                    'enabled': w.enabled,
+                }
+                for w in self.windows
             ]
-
-        return summary
-
-    def _save_schedule(self, original_data: dict):
-        """Write the current in-memory schedule back to the JSON file"""
-        original_data['schedule'] = {
-            day: [
-                {'time': entry.time.strftime('%H:%M'), 'temperature': entry.temperature}
-                for entry in entries
-            ]
-            for day, entries in self.schedule.items()
         }
-        try:
-            with open(self.schedule_file, 'w') as f:
-                json.dump(original_data, f, indent=2)
-            logger.info(f"Saved updated schedule to {self.schedule_file}")
-        except Exception as e:
-            logger.error(f"Error saving schedule: {e}")
-
-    def _fill_missing_hours(self, day_name: str, entries: List[ScheduleEntry]) -> List[ScheduleEntry]:
-        """Fill in missing HH:00 entries by carrying forward the last known temperature"""
-        entry_hours = {e.time.hour for e in entries if e.time.minute == 0}
-        missing = [h for h in range(24) if h not in entry_hours]
-
-        if not missing:
-            return entries
-
-        filled = list(entries)
-        for hour in missing:
-            target_time = datetime.strptime(f"{hour:02d}:00", "%H:%M").time()
-
-            # Find the last entry at or before this hour
-            applicable = None
-            for entry in entries:  # already sorted
-                if entry.time <= target_time:
-                    applicable = entry
-                else:
-                    break
-
-            if applicable:
-                temp = applicable.temperature
-            else:
-                # No entry before this hour — carry from previous day
-                temp = self._get_last_temperature_from_previous_day(day_name) or self.default_temperature
-
-            filled.append(ScheduleEntry(f"{hour:02d}:00", temp))
-            logger.info(f"Auto-filled missing entry for {day_name} at {hour:02d}:00: {temp}°F")
-
-        filled.sort(key=lambda x: x.time)
-        return filled
 
     def validate_schedule(self) -> List[str]:
-        """Validate the schedule and return list of warnings/errors"""
+        """Validate the schedule and return a list of warnings/errors"""
         warnings = []
 
-        # Check if all days are defined
-        days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
-        for day in days:
-            if day not in self.schedule or not self.schedule[day]:
-                warnings.append(f"No schedule defined for {day}")
+        if not self.windows:
+            warnings.append("No windows defined — temperature enforcement is disabled")
+            return warnings
 
-        # Check for reasonable temperature ranges
-        for day, entries in self.schedule.items():
-            for entry in entries:
-                if entry.temperature < 40 or entry.temperature > 90:
-                    warnings.append(f"Unusual temperature {entry.temperature}°F on {day} at {entry.time}")
+        for w in self.windows:
+            if w.temperature < 40 or w.temperature > 90:
+                warnings.append(f"Unusual temperature {w.temperature}°F in window '{w.name}'")
+            if w.start == w.end:
+                warnings.append(f"Window '{w.name}' has identical start and end time ({w.start})")
 
         return warnings
 
 
 if __name__ == "__main__":
-    # Test the schedule engine
     logging.basicConfig(level=logging.DEBUG)
 
     engine = ScheduleEngine("config/schedule.json")
     if engine.load_schedule():
         print("\nSchedule loaded successfully!")
-        print(f"\nCurrent expected temperature: {engine.get_expected_temperature()}°F")
+        print(f"\nCurrent expected temperature: {engine.get_expected_temperature()}")
 
         print("\nSchedule summary:")
         summary = engine.get_schedule_summary()

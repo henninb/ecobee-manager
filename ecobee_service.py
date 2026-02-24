@@ -171,15 +171,45 @@ class EcobeeServiceJWT:
         return True
 
     def _apply_ecobee_program(self):
-        """Push the alternating sleep/smart1 program to the Ecobee for all 24 hours."""
-        self.logger.info("Applying alternating sleep/smart1 schedule to Ecobee program...")
-        if self.controller.update_night_schedule(
-            temp=67, climate_ref="sleep", alt_climate_ref="smart1",
-            start_hour=0, end_hour=0
+        """
+        Push the night window (sleep/smart1) to the Ecobee program, then reset the
+        daytime slots back to 'home' so the Ecobee runs freely during the day.
+        """
+        windows = self.schedule.get_windows()
+        night = next((w for w in windows if w.enabled), None)
+        if not night:
+            self.logger.info("No enabled windows configured — skipping Ecobee program update")
+            return
+
+        start_hour = night.start.hour
+        end_hour = night.end.hour
+        temp = night.temperature
+
+        # Step 1: Set night slots to alternating sleep/smart1
+        self.logger.info(
+            f"Setting night slots ({start_hour:02d}:00–{end_hour:02d}:00) "
+            f"to sleep/smart1 @ {temp}°F..."
+        )
+        if not self.controller.update_night_schedule(
+            temp=temp, climate_ref="sleep", alt_climate_ref="smart1",
+            start_hour=start_hour, end_hour=end_hour
         ):
-            self.logger.info("Ecobee program updated successfully")
-        else:
-            self.logger.warning("Failed to apply Ecobee program update")
+            self.logger.warning("Failed to set night slots")
+            return
+
+        # Step 2: Reset daytime slots back to 'home' (clears the old all-day program)
+        self.logger.info(
+            f"Clearing daytime slots ({end_hour:02d}:00–{start_hour:02d}:00) to 'home'..."
+        )
+        if not self.controller.update_night_schedule(
+            temp=0, climate_ref="home",
+            start_hour=end_hour, end_hour=start_hour,
+            update_heat_temp=False
+        ):
+            self.logger.warning("Failed to clear daytime slots")
+            return
+
+        self.logger.info("Ecobee program updated successfully")
 
     def check_and_update_temperature(self):
         """Main temperature check and update logic"""
@@ -190,8 +220,14 @@ class EcobeeServiceJWT:
             if self.schedule.check_for_updates():
                 self._apply_ecobee_program()
 
-            # Get expected temperature from schedule
+            # Get expected temperature from schedule (None = outside all active windows)
             expected_temp = self.schedule.get_expected_temperature()
+            if expected_temp is None:
+                self.logger.info("Outside active window — skipping temperature enforcement")
+                self.health_server.increment_checks()
+                self.consecutive_errors = 0
+                return
+
             self.logger.info(f"Expected temperature: {expected_temp}°F")
 
             # Get current temperature setting

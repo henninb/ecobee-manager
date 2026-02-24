@@ -430,6 +430,7 @@ class TemperatureController:
                               alt_climate_ref: Optional[str] = None,
                               start_hour: int = 23, end_hour: int = 6,
                               thermostat_id: Optional[str] = None,
+                              update_heat_temp: bool = True,
                               dry_run: bool = False) -> bool:
         """
         Update the Ecobee program from start_hour to end_hour every day of the week.
@@ -437,7 +438,7 @@ class TemperatureController:
         If alt_climate_ref is given, alternates hourly: climate_ref, alt_climate_ref,
         climate_ref, ... starting with climate_ref at start_hour.
 
-        Updates the primary climate's heatTemp to temp.
+        If update_heat_temp is True (default), also updates the primary climate's heatTemp to temp.
 
         Slot layout: slot 0 = 00:00, slot 1 = 00:30, ..., slot 47 = 23:30.
         """
@@ -462,17 +463,25 @@ class TemperatureController:
                 logger.error(f"Alt climate '{alt_climate_ref}' not found. Available: {available}")
                 return False
 
-        # Build updated climates with new heatTemp for the primary climate
+        # Build updated climates, optionally updating heatTemp for the primary climate
         ecobee_temp = temp * 10
         updated_climates = []
         for climate in climates:
-            if climate.get('climateRef') == climate_ref:
+            if update_heat_temp and climate.get('climateRef') == climate_ref:
                 updated_climates.append({**climate, 'heatTemp': ecobee_temp})
             else:
                 updated_climates.append(climate)
 
-        # Ordered list of hours in the window (wraps midnight)
-        night_hours = list(range(start_hour, 24)) + list(range(0, end_hour))
+        # Ordered list of hours in the window
+        # start_hour == end_hour → all 24 hours
+        # start_hour > end_hour  → crosses midnight (e.g. 19:00–06:00)
+        # start_hour < end_hour  → same day      (e.g. 06:00–19:00)
+        if start_hour == end_hour:
+            night_hours = list(range(24))
+        elif start_hour > end_hour:
+            night_hours = list(range(start_hour, 24)) + list(range(0, end_hour))
+        else:
+            night_hours = list(range(start_hour, end_hour))
 
         updated_schedule = []
         for day_slots in schedule:
@@ -516,8 +525,8 @@ class TemperatureController:
             status = result.get('status', {})
             if status.get('code') == 0:
                 logger.info(
-                    f"Night schedule updated: '{climate_ref}' at {temp}°F "
-                    f"for {start_hour}:00-{end_hour}:00 every day"
+                    f"Schedule updated: '{climate_ref}' at {temp}°F "
+                    f"for {start_hour:02d}:00-{end_hour:02d}:00 every day"
                 )
                 return True
             else:
