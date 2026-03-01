@@ -524,10 +524,16 @@ class TemperatureController:
             result = response.json()
             status = result.get('status', {})
             if status.get('code') == 0:
-                logger.info(
-                    f"Schedule updated: '{climate_ref}' at {temp}°F "
-                    f"for {start_hour:02d}:00-{end_hour:02d}:00 every day"
-                )
+                if update_heat_temp:
+                    logger.info(
+                        f"Schedule updated: '{climate_ref}' at {temp}°F "
+                        f"for {start_hour:02d}:00-{end_hour:02d}:00 every day"
+                    )
+                else:
+                    logger.info(
+                        f"Schedule updated: '{climate_ref}' "
+                        f"for {start_hour:02d}:00-{end_hour:02d}:00 every day"
+                    )
                 return True
             else:
                 logger.error(f"API error (code {status.get('code')}): {status.get('message', status)}")

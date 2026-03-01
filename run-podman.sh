@@ -55,7 +55,7 @@ podman run --detach \
   --volume "${REMOTE_DIR}/ecobee_jwt.json:/app/ecobee_jwt.json" \
   --volume "${REMOTE_DIR}/logs:/app/logs" \
   --volume "${REMOTE_DIR}/config:/app/config:ro" \
-  --user 1000:1000 \
+  --userns=keep-id \
   --shm-size=2g \
   "${IMAGE_NAME}"
 
@@ -81,7 +81,7 @@ Environment=SELENIUM_REDIRECT_TIMEOUT=60
 Volume=${REMOTE_DIR}/ecobee_jwt.json:/app/ecobee_jwt.json
 Volume=${REMOTE_DIR}/logs:/app/logs
 Volume=${REMOTE_DIR}/config:/app/config:ro
-User=1000:1000
+UserNS=keep-id
 ShmSize=2g
 
 [Service]
