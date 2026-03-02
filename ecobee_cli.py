@@ -260,6 +260,17 @@ def cmd_schedule(controller: TemperatureController):
         sys.exit(1)
     print_program_schedule(info)
 
+    thermostat_info = controller.get_thermostat_info()
+    if thermostat_info:
+        desired_heat = thermostat_info['desired_heat']
+        if desired_heat != 67:
+            print(f"\nDesired heat is {desired_heat}°F (not 67°F) — setting to 67°F...")
+            if controller.set_temperature(67):
+                print("Done: Temperature set to 67°F")
+            else:
+                print("Error: Failed to set temperature")
+                sys.exit(1)
+
 
 def cmd_set(controller: TemperatureController, args):
     if not args:

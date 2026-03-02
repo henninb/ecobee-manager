@@ -46,7 +46,6 @@ echo "Starting container..."
 podman run --detach \
   --name="${CONTAINER_NAME}" \
   --hostname="${CONTAINER_NAME}" \
-  --publish 8080:8080 \
   --env-file="${REMOTE_DIR}/env.secrets" \
   --env CHECK_INTERVAL_MINUTES=45 \
   --env LOG_LEVEL=INFO \
@@ -72,7 +71,6 @@ After=network-online.target
 Image=localhost/${IMAGE_NAME}
 ContainerName=${CONTAINER_NAME}
 HostName=${CONTAINER_NAME}
-PublishPort=8080:8080
 EnvironmentFile=${REMOTE_DIR}/env.secrets
 Environment=CHECK_INTERVAL_MINUTES=45
 Environment=LOG_LEVEL=INFO
