@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     unzip \
     chromium \
     chromium-driver \
+    tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better caching
@@ -35,6 +36,7 @@ RUN mkdir -p config logs .cache/selenium && touch ecobee_jwt.json && chown -R ec
 USER ecobee
 
 # Set environment variables (defaults)
+ENV TZ=America/Chicago
 ENV HOME=/app
 ENV CHECK_INTERVAL_MINUTES=45
 ENV LOG_LEVEL=INFO
