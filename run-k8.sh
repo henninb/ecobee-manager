@@ -6,14 +6,24 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 # Prerequisites:
 #   - kubectl configured and pointing at your cluster
+#   - SSH access to the worker node (debian-k8s-worker-01)
 #   - Docker or Podman available for building the image
 #   - ./env.secrets file with ECOBEE_EMAIL and ECOBEE_PASSWORD
 #   - config/schedule.json present
+#
+# Storage strategy: hostPath volumes on debian-k8s-worker-01
+#   /opt/ecobee-manager/ecobee_jwt.json  — JWT token (persists across restarts)
+#   /opt/ecobee-manager/logs/            — rotating logs
+#
+# Note: subPath file mounts (PVC) are broken on this cluster's runc version;
+#       hostPath is used instead and the pod is pinned to the worker.
 # -----------------------------------------------------------------------------
 
 APP_NAME="ecobee-manager"
 NAMESPACE="ecobee-manager"
 IMAGE="ecobee-manager:latest"
+WORKER_NODE="debian-k8s-worker-01"
+HOST_DATA_DIR="/opt/ecobee-manager"
 SECRETS_FILE="./env.secrets"
 SCHEDULE_FILE="./config/schedule.json"
 
@@ -27,7 +37,7 @@ require_cmd() { command -v "$1" &>/dev/null || die "'$1' is required but not fou
 # --- preflight ---------------------------------------------------------------
 
 require_cmd kubectl
-require_cmd docker || require_cmd podman
+command -v docker &>/dev/null || command -v podman &>/dev/null || die "docker or podman is required"
 
 [[ -f "$SECRETS_FILE"  ]] || die "Missing $SECRETS_FILE — copy .env.example and fill in credentials"
 [[ -f "$SCHEDULE_FILE" ]] || die "Missing $SCHEDULE_FILE"
@@ -41,15 +51,14 @@ else
     podman build -t "$IMAGE" .
 fi
 
-# Load image into the cluster nodes (works for single-node or kubeadm clusters
-# that use containerd — adjust if you use a registry instead).
+# Load image into the cluster nodes via containerd (no registry needed).
 info "Importing image into cluster nodes via containerd"
 if command -v docker &>/dev/null; then
-    docker save "$IMAGE" | ssh debian-k8s-cp-01 "sudo ctr -n k8s.io images import -"
-    docker save "$IMAGE" | ssh debian-k8s-worker-01 "sudo ctr -n k8s.io images import -" 2>/dev/null || true
+    docker save "$IMAGE" | ssh debian-k8s-cp-01  "sudo ctr -n k8s.io images import -"
+    docker save "$IMAGE" | ssh "$WORKER_NODE"    "sudo ctr -n k8s.io images import -"
 else
-    podman save "$IMAGE" | ssh debian-k8s-cp-01 "sudo ctr -n k8s.io images import -"
-    podman save "$IMAGE" | ssh debian-k8s-worker-01 "sudo ctr -n k8s.io images import -" 2>/dev/null || true
+    podman save "$IMAGE" | ssh debian-k8s-cp-01  "sudo ctr -n k8s.io images import -"
+    podman save "$IMAGE" | ssh "$WORKER_NODE"    "sudo ctr -n k8s.io images import -"
 fi
 
 # --- parse secrets -----------------------------------------------------------
@@ -59,7 +68,6 @@ ECOBEE_EMAIL=""
 ECOBEE_PASSWORD=""
 
 while IFS='=' read -r key value || [[ -n "$key" ]]; do
-    # strip leading/trailing whitespace and ignore comments/blanks
     key="${key#"${key%%[! ]*}"}"
     key="${key%"${key##*[! ]}"}"
     [[ -z "$key" || "$key" == \#* ]] && continue
@@ -76,15 +84,24 @@ done < "$SECRETS_FILE"
 
 SCHEDULE_JSON=$(cat "$SCHEDULE_FILE")
 
-# --- storage class -----------------------------------------------------------
+# --- storage class (needed only if PVCs are used elsewhere) ------------------
 
 if ! kubectl get storageclass local-path &>/dev/null; then
-    info "No storage class found — installing local-path-provisioner"
+    info "Installing local-path-provisioner (default storage class)..."
     kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.30/deploy/local-path-storage.yaml
     kubectl patch storageclass local-path -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
-    info "Waiting for local-path-provisioner to be ready..."
     kubectl rollout status deployment/local-path-provisioner -n local-path-storage --timeout=60s
 fi
+
+# --- prepare hostPath dirs on the worker ------------------------------------
+# FileOrCreate/DirectoryOrCreate only work if the parent dir already exists.
+
+info "Creating hostPath directories on $WORKER_NODE..."
+ssh "$WORKER_NODE" "
+    sudo mkdir -p ${HOST_DATA_DIR}/logs &&
+    sudo touch ${HOST_DATA_DIR}/ecobee_jwt.json &&
+    sudo chown -R 1000:1000 ${HOST_DATA_DIR}
+"
 
 # --- apply manifests ---------------------------------------------------------
 
@@ -119,20 +136,6 @@ data:
 $(echo "$SCHEDULE_JSON" | sed 's/^/    /')
 
 ---
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: ${APP_NAME}-data
-  namespace: $NAMESPACE
-spec:
-  accessModes:
-    - ReadWriteOnce
-  storageClassName: local-path
-  resources:
-    requests:
-      storage: 1Gi
-
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -156,16 +159,8 @@ spec:
         runAsUser: 1000
         runAsGroup: 1000
         fsGroup: 1000
-      initContainers:
-        - name: init-data
-          image: $IMAGE
-          imagePullPolicy: Never
-          command: ['sh', '-c', 'touch /data/ecobee_jwt.json && mkdir -p /data/logs']
-          volumeMounts:
-            - name: data
-              mountPath: /data
-          securityContext:
-            allowPrivilegeEscalation: false
+      nodeSelector:
+        kubernetes.io/hostname: $WORKER_NODE
       containers:
         - name: $APP_NAME
           image: $IMAGE
@@ -217,24 +212,33 @@ spec:
               cpu: "500m"
               memory: "1Gi"
           volumeMounts:
-            - name: data
+            - name: jwt
               mountPath: /app/ecobee_jwt.json
-              subPath: ecobee_jwt.json
-            - name: data
+            - name: logs
               mountPath: /app/logs
-              subPath: logs
             - name: schedule
               mountPath: /app/config
               readOnly: true
+            - name: dshm
+              mountPath: /dev/shm
           securityContext:
             allowPrivilegeEscalation: false
       volumes:
-        - name: data
-          persistentVolumeClaim:
-            claimName: ${APP_NAME}-data
+        - name: jwt
+          hostPath:
+            path: ${HOST_DATA_DIR}/ecobee_jwt.json
+            type: FileOrCreate
+        - name: logs
+          hostPath:
+            path: ${HOST_DATA_DIR}/logs
+            type: DirectoryOrCreate
         - name: schedule
           configMap:
             name: ${APP_NAME}-schedule
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi
 
 ---
 apiVersion: v1
@@ -263,5 +267,7 @@ info "Deployment complete. Pod status:"
 kubectl get pods -n "$NAMESPACE" -o wide
 
 info ""
-info "To view logs:   kubectl logs -n $NAMESPACE -l app=$APP_NAME -f"
-info "To check health: kubectl port-forward -n $NAMESPACE svc/$APP_NAME 8080:8080 then curl http://localhost:8080/health"
+info "To view logs:    kubectl logs -n $NAMESPACE -l app=$APP_NAME -f"
+info "To check health: kubectl port-forward -n $NAMESPACE svc/$APP_NAME 8080:8080"
+info "                 then: curl http://localhost:8080/health"
+info "Data on worker:  ssh $WORKER_NODE ls -la $HOST_DATA_DIR"
