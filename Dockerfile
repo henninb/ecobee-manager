@@ -4,10 +4,8 @@ FROM python:3.13-slim
 WORKDIR /app
 
 # Install system dependencies for Chrome/Selenium (if needed for token refresh)
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
-    gnupg \
-    unzip \
     chromium \
     chromium-driver \
     tzdata \
