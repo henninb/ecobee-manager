@@ -76,6 +76,16 @@ done < "$SECRETS_FILE"
 
 SCHEDULE_JSON=$(cat "$SCHEDULE_FILE")
 
+# --- storage class -----------------------------------------------------------
+
+if ! kubectl get storageclass local-path &>/dev/null; then
+    info "No storage class found — installing local-path-provisioner"
+    kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.30/deploy/local-path-storage.yaml
+    kubectl patch storageclass local-path -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+    info "Waiting for local-path-provisioner to be ready..."
+    kubectl rollout status deployment/local-path-provisioner -n local-path-storage --timeout=60s
+fi
+
 # --- apply manifests ---------------------------------------------------------
 
 info "Applying Kubernetes manifests to namespace: $NAMESPACE"
@@ -117,6 +127,7 @@ metadata:
 spec:
   accessModes:
     - ReadWriteOnce
+  storageClassName: local-path
   resources:
     requests:
       storage: 1Gi
@@ -145,6 +156,16 @@ spec:
         runAsUser: 1000
         runAsGroup: 1000
         fsGroup: 1000
+      initContainers:
+        - name: init-data
+          image: $IMAGE
+          imagePullPolicy: Never
+          command: ['sh', '-c', 'touch /data/ecobee_jwt.json && mkdir -p /data/logs']
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          securityContext:
+            allowPrivilegeEscalation: false
       containers:
         - name: $APP_NAME
           image: $IMAGE
