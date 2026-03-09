@@ -12,7 +12,7 @@ services:
         required: true
     environment:
       # Optional configuration (override env.secrets values or set defaults)
-      - CHECK_INTERVAL_MINUTES=${CHECK_INTERVAL_MINUTES:-45}
+      - CHECK_INTERVAL_MINUTES=${CHECK_INTERVAL_MINUTES:-40}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - SELENIUM_TIMEOUT=${SELENIUM_TIMEOUT:-30}
       - SELENIUM_REDIRECT_TIMEOUT=${SELENIUM_REDIRECT_TIMEOUT:-60}

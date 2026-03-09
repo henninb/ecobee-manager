@@ -32,7 +32,7 @@ docker run -d \
   --user "$(id -u):$(id -g)" \
   -p 8080:8080 \
   --env-file ./env.secrets \
-  -e CHECK_INTERVAL_MINUTES="${CHECK_INTERVAL_MINUTES:-45}" \
+  -e CHECK_INTERVAL_MINUTES="${CHECK_INTERVAL_MINUTES:-40}" \
   -e LOG_LEVEL="${LOG_LEVEL:-INFO}" \
   -e SELENIUM_TIMEOUT="${SELENIUM_TIMEOUT:-30}" \
   -e SELENIUM_REDIRECT_TIMEOUT="${SELENIUM_REDIRECT_TIMEOUT:-60}" \

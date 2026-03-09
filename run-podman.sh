@@ -47,7 +47,7 @@ podman run --detach \
   --name="${CONTAINER_NAME}" \
   --hostname="${CONTAINER_NAME}" \
   --env-file="${REMOTE_DIR}/env.secrets" \
-  --env CHECK_INTERVAL_MINUTES=45 \
+  --env CHECK_INTERVAL_MINUTES=40 \
   --env LOG_LEVEL=INFO \
   --env SELENIUM_TIMEOUT=30 \
   --env SELENIUM_REDIRECT_TIMEOUT=60 \
@@ -72,7 +72,7 @@ Image=localhost/${IMAGE_NAME}
 ContainerName=${CONTAINER_NAME}
 HostName=${CONTAINER_NAME}
 EnvironmentFile=${REMOTE_DIR}/env.secrets
-Environment=CHECK_INTERVAL_MINUTES=45
+Environment=CHECK_INTERVAL_MINUTES=40
 Environment=LOG_LEVEL=INFO
 Environment=SELENIUM_TIMEOUT=30
 Environment=SELENIUM_REDIRECT_TIMEOUT=60

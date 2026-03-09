@@ -180,7 +180,7 @@ spec:
             - name: TZ
               value: "America/Chicago"
             - name: CHECK_INTERVAL_MINUTES
-              value: "45"
+              value: "40"
             - name: LOG_LEVEL
               value: "INFO"
             - name: SELENIUM_TIMEOUT
