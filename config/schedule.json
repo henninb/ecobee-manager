@@ -1,5 +1,6 @@
 {
   "timezone": "America/Chicago",
+  "default_temperature": 67,
   "windows": [
     {
       "name": "night",

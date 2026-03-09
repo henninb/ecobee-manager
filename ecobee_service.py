@@ -33,7 +33,7 @@ class EcobeeServiceJWT:
         self.health_server = None
 
         # Configuration
-        self.check_interval_minutes = int(os.environ.get('CHECK_INTERVAL_MINUTES', 45))
+        self.check_interval_minutes = int(os.environ.get('CHECK_INTERVAL_MINUTES', 40))
         self.log_level = os.environ.get('LOG_LEVEL', 'INFO')
 
         # Error tracking
@@ -223,7 +223,7 @@ class EcobeeServiceJWT:
             # Get expected temperature from schedule (None = outside all active windows)
             expected_temp = self.schedule.get_expected_temperature()
             if expected_temp is None:
-                self.logger.info("Outside active window — skipping temperature enforcement")
+                self.logger.info("Outside active window and no default temperature configured — skipping enforcement")
                 self.health_server.increment_checks()
                 self.consecutive_errors = 0
                 return

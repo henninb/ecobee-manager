@@ -43,6 +43,7 @@ class ScheduleEngine:
         self.schedule_file = schedule_file
         self.timezone = None
         self.windows: List[TimeWindow] = []
+        self.default_temperature: Optional[int] = None
         self.last_modified = None
 
     def load_schedule(self) -> bool:
@@ -63,6 +64,10 @@ class ScheduleEngine:
                 logger.warning(f"Unknown timezone: {tz_str}, using America/Chicago")
                 self.timezone = pytz.timezone('America/Chicago')
 
+            # Load default temperature
+            default = data.get('default_temperature')
+            self.default_temperature = int(default) if default is not None else None
+
             # Load windows
             self.windows = []
             for entry in data.get('windows', []):
@@ -80,6 +85,8 @@ class ScheduleEngine:
             self.last_modified = Path(self.schedule_file).stat().st_mtime
             logger.info(f"Loaded schedule from {self.schedule_file}")
             logger.info(f"Timezone: {self.timezone}")
+            if self.default_temperature is not None:
+                logger.info(f"Default temperature: {self.default_temperature}°F")
             logger.info(f"Loaded {len(self.windows)} window(s)")
             for w in self.windows:
                 status = "enabled" if w.enabled else "disabled"
@@ -121,6 +128,10 @@ class ScheduleEngine:
             if window.enabled and window.contains(current_time):
                 logger.debug(f"Time {current_time} matched window '{window.name}': {window.temperature}°F")
                 return window.temperature
+
+        if self.default_temperature is not None:
+            logger.debug(f"Time {current_time} is outside all active windows, using default {self.default_temperature}°F")
+            return self.default_temperature
 
         logger.debug(f"Time {current_time} is outside all active windows")
         return None

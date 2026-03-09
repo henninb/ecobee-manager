@@ -21,7 +21,8 @@ set -euo pipefail
 
 APP_NAME="ecobee-manager"
 NAMESPACE="ecobee-manager"
-IMAGE="ecobee-manager:latest"
+IMAGE_TAG=$(git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)
+IMAGE="${APP_NAME}:${IMAGE_TAG}"
 WORKER_NODE="debian-k8s-worker-01"
 HOST_DATA_DIR="/opt/ecobee-manager"
 SECRETS_FILE="./env.secrets"
@@ -44,7 +45,7 @@ command -v docker &>/dev/null || command -v podman &>/dev/null || die "docker or
 
 # --- build image -------------------------------------------------------------
 
-info "Building Docker image: $IMAGE"
+info "Building Docker image: $IMAGE (tag: $IMAGE_TAG)"
 if command -v docker &>/dev/null; then
     docker build -t "$IMAGE" .
 else
@@ -257,6 +258,11 @@ spec:
       targetPort: 8080
   type: ClusterIP
 EOF
+
+# --- force rollout -----------------------------------------------------------
+
+info "Restarting deployment to pick up new image (${IMAGE})..."
+kubectl rollout restart deployment/"$APP_NAME" -n "$NAMESPACE"
 
 # --- wait for rollout --------------------------------------------------------
 
