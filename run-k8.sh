@@ -20,7 +20,7 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 
 APP_NAME="ecobee-manager"
-NAMESPACE="ecobee-manager"
+NAMESPACE="default"
 IMAGE_TAG=$(git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)
 IMAGE="${APP_NAME}:${IMAGE_TAG}"
 WORKER_NODE="debian-k8s-worker-01"
