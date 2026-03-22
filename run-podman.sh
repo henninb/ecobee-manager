@@ -83,7 +83,7 @@ UserNS=keep-id
 ShmSize=2g
 
 [Service]
-Restart=always
+Restart=no
 TimeoutStartSec=120
 
 [Install]
