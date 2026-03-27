@@ -4,11 +4,8 @@ set -euo pipefail
 IMAGE="ecobee-temperature-manager"
 CONTAINER="ecobee-temperature-manager"
 
-# Verify required secrets file exists
-if [ ! -f env.secrets ]; then
-  echo "Error: env.secrets not found. Create it with ECOBEE_EMAIL and ECOBEE_PASSWORD."
-  exit 1
-fi
+ECOBEE_EMAIL=$(gopass show ecobee/email)
+ECOBEE_PASSWORD=$(gopass show ecobee/password)
 
 # Ensure host-side files and directories exist
 touch ecobee_jwt.json
@@ -22,7 +19,7 @@ fi
 
 # Build the image
 echo "Building image: ${IMAGE}"
-docker build -t "${IMAGE}" .
+docker build --network=host -t "${IMAGE}" .
 
 # Run the container
 echo "Starting container: ${CONTAINER}"
@@ -31,11 +28,12 @@ docker run -d \
   --restart unless-stopped \
   --user "$(id -u):$(id -g)" \
   -p 8080:8080 \
-  --env-file ./env.secrets \
-  -e CHECK_INTERVAL_MINUTES="${CHECK_INTERVAL_MINUTES:-40}" \
-  -e LOG_LEVEL="${LOG_LEVEL:-INFO}" \
-  -e SELENIUM_TIMEOUT="${SELENIUM_TIMEOUT:-30}" \
-  -e SELENIUM_REDIRECT_TIMEOUT="${SELENIUM_REDIRECT_TIMEOUT:-60}" \
+  --env ECOBEE_EMAIL="${ECOBEE_EMAIL}" \
+  --env ECOBEE_PASSWORD="${ECOBEE_PASSWORD}" \
+  --env CHECK_INTERVAL_MINUTES="${CHECK_INTERVAL_MINUTES:-40}" \
+  --env LOG_LEVEL="${LOG_LEVEL:-INFO}" \
+  --env SELENIUM_TIMEOUT="${SELENIUM_TIMEOUT:-30}" \
+  --env SELENIUM_REDIRECT_TIMEOUT="${SELENIUM_REDIRECT_TIMEOUT:-60}" \
   -v "$(pwd)/ecobee_jwt.json:/app/ecobee_jwt.json" \
   -v "$(pwd)/logs:/app/logs" \
   -v "$(pwd)/config:/app/config:ro" \

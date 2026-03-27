@@ -8,7 +8,7 @@ set -euo pipefail
 #   - kubectl configured and pointing at your cluster
 #   - SSH access to the worker node (debian-k8s-worker-01)
 #   - Docker or Podman available for building the image
-#   - ./env.secrets file with ECOBEE_EMAIL and ECOBEE_PASSWORD
+#   - gopass with ecobee/email and ecobee/password entries
 #   - config/schedule.json present
 #
 # Storage strategy: hostPath volumes on debian-k8s-worker-01
@@ -25,7 +25,6 @@ IMAGE_TAG=$(git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)
 IMAGE="${APP_NAME}:${IMAGE_TAG}"
 WORKER_NODE="debian-k8s-worker-01"
 HOST_DATA_DIR="/opt/ecobee-manager"
-SECRETS_FILE="./env.secrets"
 SCHEDULE_FILE="./config/schedule.json"
 
 # --- helpers -----------------------------------------------------------------
@@ -38,18 +37,18 @@ require_cmd() { command -v "$1" &>/dev/null || die "'$1' is required but not fou
 # --- preflight ---------------------------------------------------------------
 
 require_cmd kubectl
+require_cmd gopass
 command -v docker &>/dev/null || command -v podman &>/dev/null || die "docker or podman is required"
 
-[[ -f "$SECRETS_FILE"  ]] || die "Missing $SECRETS_FILE — copy .env.example and fill in credentials"
 [[ -f "$SCHEDULE_FILE" ]] || die "Missing $SCHEDULE_FILE"
 
 # --- build image -------------------------------------------------------------
 
 info "Building Docker image: $IMAGE (tag: $IMAGE_TAG)"
 if command -v docker &>/dev/null; then
-    docker build -t "$IMAGE" .
+    docker build --network=host -t "$IMAGE" .
 else
-    podman build -t "$IMAGE" .
+    podman build --network=host -t "$IMAGE" .
 fi
 
 # Load image into the cluster nodes via containerd (no registry needed).
@@ -62,26 +61,11 @@ else
     podman save "$IMAGE" | ssh "$WORKER_NODE"    "sudo ctr -n k8s.io images import -"
 fi
 
-# --- parse secrets -----------------------------------------------------------
+# --- read secrets ------------------------------------------------------------
 
-info "Reading credentials from $SECRETS_FILE"
-ECOBEE_EMAIL=""
-ECOBEE_PASSWORD=""
-
-while IFS='=' read -r key value || [[ -n "$key" ]]; do
-    key="${key#"${key%%[! ]*}"}"
-    key="${key%"${key##*[! ]}"}"
-    [[ -z "$key" || "$key" == \#* ]] && continue
-    value="${value#"${value%%[! ]*}"}"
-    value="${value%"${value##*[! ]}"}"
-    case "$key" in
-        ECOBEE_EMAIL)    ECOBEE_EMAIL="$value"    ;;
-        ECOBEE_PASSWORD) ECOBEE_PASSWORD="$value" ;;
-    esac
-done < "$SECRETS_FILE"
-
-[[ -n "$ECOBEE_EMAIL"    ]] || die "ECOBEE_EMAIL not found in $SECRETS_FILE"
-[[ -n "$ECOBEE_PASSWORD" ]] || die "ECOBEE_PASSWORD not found in $SECRETS_FILE"
+info "Reading credentials from gopass"
+ECOBEE_EMAIL=$(gopass show ecobee/email)
+ECOBEE_PASSWORD=$(gopass show ecobee/password)
 
 SCHEDULE_JSON=$(cat "$SCHEDULE_FILE")
 

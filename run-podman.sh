@@ -6,6 +6,9 @@ REMOTE_DIR="/home/${REMOTE_USER}/ecobee-manager"
 IMAGE_NAME="ecobee-manager"
 CONTAINER_NAME="ecobee-manager"
 
+ECOBEE_EMAIL=$(gopass show ecobee/email)
+ECOBEE_PASSWORD=$(gopass show ecobee/password)
+
 log() {
   echo "$(date +"%Y-%m-%d %H:%M:%S") - $*"
 }
@@ -13,6 +16,11 @@ log() {
 log_error() {
   echo "$(date +"%Y-%m-%d %H:%M:%S") - ERROR: $*" >&2
 }
+
+# Push secrets into podman's secret store on the remote host
+log "=== Updating podman secrets on ${REMOTE_HOST} ==="
+printf '%s' "${ECOBEE_EMAIL}"    | ssh "${REMOTE_USER}@${REMOTE_HOST}" 'podman secret create --replace ECOBEE_EMAIL -'
+printf '%s' "${ECOBEE_PASSWORD}" | ssh "${REMOTE_USER}@${REMOTE_HOST}" 'podman secret create --replace ECOBEE_PASSWORD -'
 
 # Sync project files to remote host
 # Exclude ecobee_jwt.json and logs/ to preserve remote state across deploys
@@ -28,7 +36,9 @@ rsync -av \
 
 # Build and run on remote host
 log "=== Building and deploying container on ${REMOTE_HOST} ==="
-ssh -T "${REMOTE_USER}@${REMOTE_HOST}" REMOTE_DIR="${REMOTE_DIR}" IMAGE_NAME="${IMAGE_NAME}" CONTAINER_NAME="${CONTAINER_NAME}" 'bash -s' << 'ENDSSH'
+ssh -T "${REMOTE_USER}@${REMOTE_HOST}" \
+  REMOTE_DIR="${REMOTE_DIR}" IMAGE_NAME="${IMAGE_NAME}" CONTAINER_NAME="${CONTAINER_NAME}" \
+  'bash -s' << 'ENDSSH'
 set -e
 
 cd "${REMOTE_DIR}"
@@ -40,13 +50,14 @@ echo "Removing old image..."
 podman rmi "${IMAGE_NAME}" 2>/dev/null || true
 
 echo "Building new image..."
-podman build -t "${IMAGE_NAME}" .
+podman build --network=host -t "${IMAGE_NAME}" .
 
 echo "Starting container..."
 podman run --detach \
   --name="${CONTAINER_NAME}" \
   --hostname="${CONTAINER_NAME}" \
-  --env-file="${REMOTE_DIR}/env.secrets" \
+  --secret ECOBEE_EMAIL,type=env \
+  --secret ECOBEE_PASSWORD,type=env \
   --env CHECK_INTERVAL_MINUTES=40 \
   --env LOG_LEVEL=INFO \
   --env SELENIUM_TIMEOUT=30 \
@@ -71,7 +82,8 @@ After=network-online.target
 Image=localhost/${IMAGE_NAME}
 ContainerName=${CONTAINER_NAME}
 HostName=${CONTAINER_NAME}
-EnvironmentFile=${REMOTE_DIR}/env.secrets
+Secret=ECOBEE_EMAIL,type=env
+Secret=ECOBEE_PASSWORD,type=env
 Environment=CHECK_INTERVAL_MINUTES=40
 Environment=LOG_LEVEL=INFO
 Environment=SELENIUM_TIMEOUT=30
