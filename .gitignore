@@ -3,3 +3,6 @@ __pycache__/
 env.secrets
 env.secrets.enc
 ecobee_jwt.json
+
+# Claude Code local settings
+.claude/settings.local.json
