@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import shutil
+import stat
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -20,8 +21,21 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.common.exceptions import TimeoutException, WebDriverException
+import jwt as pyjwt
+from jwt import PyJWKClient
 
 logger = logging.getLogger(__name__)
+
+_JWKS_URI = "https://auth.ecobee.com/.well-known/jwks.json"
+_ECOBEE_AUDIENCE = "https://prod.ecobee.com/api/v1"
+_jwks_client: PyJWKClient | None = None
+
+
+def _get_jwks_client() -> PyJWKClient:
+    global _jwks_client
+    if _jwks_client is None:
+        _jwks_client = PyJWKClient(_JWKS_URI, cache_jwk_set=True, lifespan=3600)
+    return _jwks_client
 
 
 class EcobeeAuthJWT:
@@ -46,23 +60,59 @@ class EcobeeAuthJWT:
 
     def _parse_jwt_timestamps(self, token: str):
         """
-        Decode the JWT payload and return (expires_at, issued_at) as UTC datetimes.
-        Falls back to (now + TOKEN_LIFETIME, now) if the token cannot be parsed.
+        Verify the JWT signature via ecobee's JWKS endpoint and return
+        (expires_at, issued_at) as UTC datetimes.
+
+        Falls back to an unverified payload decode only when the JWKS endpoint is
+        unreachable (e.g. no network on first boot).  An expired-but-structurally-
+        valid token is returned as-is so the caller can decide to refresh.
         """
-        try:
-            payload_b64 = token.split('.')[1]
-            payload_b64 += '=' * (4 - len(payload_b64) % 4)
-            payload = json.loads(base64.b64decode(payload_b64))
-            now = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc)
+
+        def _timestamps_from_payload(payload: dict):
             exp = payload.get('exp')
             iat = payload.get('iat')
             expires_at = datetime.fromtimestamp(exp, tz=timezone.utc) if exp else now + timedelta(seconds=self.TOKEN_LIFETIME)
             issued_at = datetime.fromtimestamp(iat, tz=timezone.utc) if iat else now
             return expires_at, issued_at
+
+        def _unverified_payload(token: str) -> dict:
+            payload_b64 = token.split('.')[1]
+            payload_b64 += '=' * (4 - len(payload_b64) % 4)
+            return json.loads(base64.b64decode(payload_b64))
+
+        # --- Attempt verified decode ---
+        try:
+            client = _get_jwks_client()
+            signing_key = client.get_signing_key_from_jwt(token)
+            payload = pyjwt.decode(
+                token,
+                signing_key.key,
+                algorithms=["RS256"],
+                audience=_ECOBEE_AUDIENCE,
+                options={"verify_exp": False},  # expiry checked separately via needs_refresh()
+            )
+            logger.debug("JWT signature verified via JWKS")
+            return _timestamps_from_payload(payload)
+        except pyjwt.exceptions.PyJWTError as e:
+            logger.warning(f"JWT signature verification failed: {e}")
+        except Exception as e:
+            logger.warning(f"JWKS fetch failed, falling back to unverified decode: {e}")
+
+        # --- Fallback: unverified decode (network unavailable) ---
+        try:
+            return _timestamps_from_payload(_unverified_payload(token))
         except Exception as e:
             logger.warning(f"Could not parse JWT timestamps: {e}")
-            now = datetime.now(timezone.utc)
             return now + timedelta(seconds=self.TOKEN_LIFETIME), now
+
+    def _chromedriver_log_path(self) -> str:
+        """Return a path to the chromedriver log inside a private, owner-only temp directory."""
+        log_dir = Path(f'/tmp/ecobee-{os.getuid()}')
+        log_dir.mkdir(mode=0o700, exist_ok=True)
+        os.chmod(log_dir, stat.S_IRWXU)  # enforce even if dir already existed
+        log_path = log_dir / 'chromedriver.log'
+        return str(log_path)
 
     def _init_driver(self, headless: bool = True):
         """Initialize Chrome driver"""
@@ -103,11 +153,12 @@ class EcobeeAuthJWT:
         if os.path.exists(chromium_bin):
             chrome_options.binary_location = chromium_bin
 
+        chromedriver_log = self._chromedriver_log_path()
         try:
             if os.path.exists(chromedriver_bin):
-                service = Service(chromedriver_bin, log_output='/tmp/chromedriver.log')
+                service = Service(chromedriver_bin, log_output=chromedriver_log)
             else:
-                service = Service(log_output='/tmp/chromedriver.log')
+                service = Service(log_output=chromedriver_log)
             self.driver = webdriver.Chrome(service=service, options=chrome_options)
             self.driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
                 'source': '''
@@ -121,7 +172,7 @@ class EcobeeAuthJWT:
         except WebDriverException as e:
             logger.error(f"Failed to initialize Chrome driver: {e}")
             try:
-                with open('/tmp/chromedriver.log', 'r') as f:
+                with open(chromedriver_log, 'r') as f:
                     logger.error(f"ChromeDriver log:\n{f.read()}")
             except Exception:
                 pass
@@ -171,7 +222,6 @@ class EcobeeAuthJWT:
                 element.dispatchEvent(new Event('change', { bubbles: true }));
                 element.dispatchEvent(new Event('blur', { bubbles: true }));
             """, email_field, self.email)
-            logger.debug(f"Email entered: {self.email}")
 
             # Give the page a moment to process and enable the button
             time.sleep(2)

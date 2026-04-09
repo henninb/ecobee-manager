@@ -4,11 +4,13 @@ Health Server Module
 HTTP server for health checks and status monitoring
 """
 
+import functools
 import logging
+import os
 import threading
 from datetime import datetime
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request, abort
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +22,7 @@ class HealthServer:
         self.port = port
         self.app = Flask(__name__)
         self.server_thread = None
+        self._api_key = os.environ.get('HEALTH_API_KEY')
 
         # Service statistics
         self.start_time = datetime.now()
@@ -44,6 +47,17 @@ class HealthServer:
         }
 
         self._setup_routes()
+
+    def _require_api_key(self, f):
+        """Decorator: reject requests that lack the correct X-API-Key header."""
+        @functools.wraps(f)
+        def decorated(*args, **kwargs):
+            if self._api_key:
+                provided = request.headers.get('X-API-Key')
+                if not provided or provided != self._api_key:
+                    abort(403)
+            return f(*args, **kwargs)
+        return decorated
 
     def _setup_routes(self):
         """Setup Flask routes"""
@@ -70,6 +84,7 @@ class HealthServer:
             return jsonify(response), status_code
 
         @self.app.route('/status', methods=['GET'])
+        @self._require_api_key
         def status():
             """Detailed status endpoint"""
             uptime_seconds = (datetime.now() - self.start_time).total_seconds()
@@ -122,6 +137,7 @@ class HealthServer:
             return jsonify(response)
 
         @self.app.route('/schedule', methods=['GET'])
+        @self._require_api_key
         def schedule():
             """Current schedule and expected temperature"""
             response = {
@@ -134,6 +150,7 @@ class HealthServer:
             return jsonify(response)
 
         @self.app.route('/stats', methods=['GET'])
+        @self._require_api_key
         def stats():
             """Service statistics"""
             uptime_seconds = (datetime.now() - self.start_time).total_seconds()
@@ -196,18 +213,15 @@ class HealthServer:
         self.stats['last_error'] = datetime.now()
 
     def start(self):
-        """Start the health server in a background thread"""
+        """Start the health server in a background thread using waitress."""
         def run_server():
-            # Disable Flask's default logging
-            log = logging.getLogger('werkzeug')
-            log.setLevel(logging.ERROR)
-
-            logger.info(f"Starting health server on port {self.port}")
-            self.app.run(host='0.0.0.0', port=self.port, threaded=True)
+            from waitress import serve
+            logger.info(f"Starting health server on 127.0.0.1:{self.port}")
+            serve(self.app, host='127.0.0.1', port=self.port, threads=4)
 
         self.server_thread = threading.Thread(target=run_server, daemon=True)
         self.server_thread.start()
-        logger.info(f"Health server started on http://0.0.0.0:{self.port}")
+        logger.info(f"Health server started on http://127.0.0.1:{self.port}")
 
     def is_running(self) -> bool:
         """Check if server is running"""
