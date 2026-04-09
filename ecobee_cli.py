@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from temperature_controller import TemperatureController
 
 JWT_FILE = "ecobee_jwt.json"
+DEFAULT_HEAT_TEMP = 67  # °F — the nightly setpoint this service enforces
 
 
 def load_token() -> dict:
@@ -230,7 +231,7 @@ def cmd_schedule_night(controller: TemperatureController, args):
     dry_run = '--dry-run' in args
 
     result = controller.update_night_schedule(
-        temp=67, climate_ref="sleep", alt_climate_ref="smart1",
+        temp=DEFAULT_HEAT_TEMP, climate_ref="sleep", alt_climate_ref="smart1",
         start_hour=0, end_hour=0, dry_run=dry_run
     )
 
@@ -263,10 +264,10 @@ def cmd_schedule(controller: TemperatureController):
     thermostat_info = controller.get_thermostat_info()
     if thermostat_info:
         desired_heat = thermostat_info['desired_heat']
-        if desired_heat != 67:
-            print(f"\nDesired heat is {desired_heat}°F (not 67°F) — setting to 67°F...")
-            if controller.set_temperature(67):
-                print("Done: Temperature set to 67°F")
+        if desired_heat != DEFAULT_HEAT_TEMP:
+            print(f"\nDesired heat is {desired_heat}°F (not {DEFAULT_HEAT_TEMP}°F) — setting to {DEFAULT_HEAT_TEMP}°F...")
+            if controller.set_temperature(DEFAULT_HEAT_TEMP):
+                print(f"Done: Temperature set to {DEFAULT_HEAT_TEMP}°F")
             else:
                 print("Error: Failed to set temperature")
                 sys.exit(1)

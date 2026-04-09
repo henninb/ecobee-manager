@@ -10,14 +10,15 @@ import sys
 import time
 import signal
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler
 from collections import deque
 
 from ecobee_auth_jwt import EcobeeAuthJWT
-from schedule_engine import ScheduleEngine
-from temperature_controller import TemperatureController
 from health_server import HealthServer
+from schedule_engine import ScheduleEngine
+from secrets_loader import load_secrets
+from temperature_controller import TemperatureController
 
 
 class EcobeeServiceJWT:
@@ -95,8 +96,6 @@ class EcobeeServiceJWT:
         """Initialize all service components"""
         self.logger.info("Initializing Ecobee Temperature Management Service (JWT)...")
 
-        # Load credentials from env.secrets.enc (SOPS) or env.secrets
-        from secrets_loader import load_secrets
         load_secrets()
 
         # Get credentials
@@ -274,12 +273,9 @@ class EcobeeServiceJWT:
             self.health_server.increment_errors()
             self.consecutive_errors += 1
 
-    def _check_excessive_changes(self):
-        """Check for excessive temperature changes in the last hour"""
-        now = datetime.now()
-        one_hour_ago = datetime.fromtimestamp(now.timestamp() - 3600)
-
-        # Count reverts in last hour
+    def _check_excessive_changes(self) -> None:
+        """Check for excessive temperature changes in the last hour."""
+        one_hour_ago = datetime.now() - timedelta(hours=1)
         recent_count = sum(1 for revert_time in self.recent_reverts if revert_time > one_hour_ago)
 
         if recent_count > 10:

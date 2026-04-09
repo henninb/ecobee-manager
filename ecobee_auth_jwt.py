@@ -6,12 +6,13 @@ Uses Selenium to login and extract JWT token from _TOKEN cookie
 
 import base64
 import json
+import logging
 import os
 import re
 import shutil
-import logging
+import time
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from pathlib import Path
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -19,7 +20,6 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.common.exceptions import TimeoutException, WebDriverException
-import time
 
 logger = logging.getLogger(__name__)
 
@@ -358,8 +358,8 @@ class EcobeeAuthJWT:
         else:
             logger.warning("Could not capture API context — run with DEBUG logging for details")
 
-    def save_token(self):
-        """Save JWT token to config file with expiration tracking"""
+    def save_token(self) -> None:
+        """Save JWT token to config file with expiration tracking."""
         config = {
             'jwt_token': self.jwt_token,
             'token_expires_at': self.token_expires_at.isoformat() if self.token_expires_at else None,
@@ -367,27 +367,23 @@ class EcobeeAuthJWT:
             'api_base_url': self.api_base_url,
         }
         try:
-            # Create data directory if it doesn't exist
-            dir_name = os.path.dirname(self.config_file)
-            if dir_name:
-                os.makedirs(dir_name, exist_ok=True)
-
-            with open(self.config_file, 'w') as f:
-                json.dump(config, f, indent=2)
-            os.chmod(self.config_file, 0o600)
+            config_path = Path(self.config_file)
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text(json.dumps(config, indent=2))
+            config_path.chmod(0o600)
             logger.info(f"Saved JWT token to {self.config_file}")
         except Exception as e:
             logger.error(f"Error saving token: {e}")
 
     def load_token(self) -> bool:
-        """Load saved JWT token from config file"""
-        if not os.path.exists(self.config_file):
+        """Load saved JWT token from config file."""
+        config_path = Path(self.config_file)
+        if not config_path.exists():
             logger.info(f"No token file found at {self.config_file}")
             return False
 
         try:
-            with open(self.config_file, 'r') as f:
-                config = json.load(f)
+            config = json.loads(config_path.read_text())
 
             self.jwt_token = config.get('jwt_token')
             self.api_base_url = config.get('api_base_url')
@@ -427,7 +423,7 @@ class EcobeeAuthJWT:
 
         return datetime.now(timezone.utc) < self.token_expires_at
 
-    def get_token(self) -> Optional[str]:
+    def get_token(self) -> str | None:
         """
         Get valid JWT token, refreshing if necessary
 

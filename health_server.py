@@ -5,10 +5,10 @@ HTTP server for health checks and status monitoring
 """
 
 import logging
-from flask import Flask, jsonify
-from datetime import datetime
-from typing import Dict, Optional
 import threading
+from datetime import datetime
+
+from flask import Flask, jsonify
 
 logger = logging.getLogger(__name__)
 
@@ -158,8 +158,8 @@ class HealthServer:
 
             return jsonify(response)
 
-    def update_token_status(self, valid: bool, expires_at: Optional[datetime] = None,
-                           refresh_expires_at: Optional[datetime] = None):
+    def update_token_status(self, valid: bool, expires_at: datetime | None = None,
+                            refresh_expires_at: datetime | None = None) -> None:
         """Update token status"""
         self.state['token_valid'] = valid
         if expires_at:
@@ -167,7 +167,7 @@ class HealthServer:
         if refresh_expires_at:
             self.state['refresh_token_expires_at'] = refresh_expires_at
 
-    def update_temperature_status(self, current: Optional[int], expected: Optional[int]):
+    def update_temperature_status(self, current: int | None, expected: int | None) -> None:
         """Update temperature status"""
         self.state['current_temperature'] = current
         self.state['expected_temperature'] = expected

@@ -6,30 +6,40 @@ Handles checking and setting thermostat temperature via Ecobee API
 
 import logging
 import requests
-from typing import Optional, Dict, List
-from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_BASE_URL = "https://api.ecobee.com/1"
 
 
 class TemperatureController:
     """Controls and monitors Ecobee thermostat temperature"""
 
-    BASE_URL = "https://api.ecobee.com/1"
     TEMPERATURE_TOLERANCE = 0.5  # ±0.5°F tolerance
 
-    def __init__(self, access_token: str, base_url: str = None):
+    def __init__(self, access_token: str, base_url: str | None = None):
         self.access_token = access_token
-        if base_url:
-            self.BASE_URL = base_url
+        self.base_url = base_url or _DEFAULT_BASE_URL
 
-    def update_token(self, access_token: str):
-        """Update the access token"""
+    def update_token(self, access_token: str) -> None:
+        """Update the access token."""
         self.access_token = access_token
 
-    def get_thermostats(self) -> Optional[List[Dict]]:
-        """Get list of thermostats"""
-        url = f"{self.BASE_URL}/thermostat"
+    def _get_thermostat(self, thermostat_id: str | None = None) -> dict | None:
+        """Fetch thermostats and return the one matching thermostat_id, or the first."""
+        thermostats = self.get_thermostats()
+        if not thermostats:
+            return None
+        if thermostat_id:
+            thermostat = next((t for t in thermostats if t['identifier'] == thermostat_id), None)
+            if not thermostat:
+                logger.error(f"Thermostat {thermostat_id} not found")
+            return thermostat
+        return thermostats[0]
+
+    def get_thermostats(self) -> list[dict] | None:
+        """Get list of thermostats."""
+        url = f"{self.base_url}/thermostat"
         params = {
             'format': 'json',
             'body': '{"selection":{"selectionType":"registered","selectionMatch":"","includeRuntime":true,"includeSettings":true}}'
@@ -55,22 +65,13 @@ class TemperatureController:
             logger.error(f"Unexpected error getting thermostats: {e}")
             return None
 
-    def get_current_temperature_setting(self, thermostat_id: Optional[str] = None) -> Optional[int]:
+    def get_current_temperature_setting(self, thermostat_id: str | None = None) -> int | None:
         """
-        Get current temperature setting (hold or schedule)
-        Returns temperature in Fahrenheit
+        Get current temperature setting (hold or schedule).
+        Return temperature in Fahrenheit.
         """
-        thermostats = self.get_thermostats()
-        if not thermostats:
-            return None
-
-        # Use first thermostat if none specified
-        thermostat = thermostats[0] if not thermostat_id else None
-        if thermostat_id:
-            thermostat = next((t for t in thermostats if t['identifier'] == thermostat_id), None)
-
+        thermostat = self._get_thermostat(thermostat_id)
         if not thermostat:
-            logger.error(f"Thermostat {thermostat_id} not found")
             return None
 
         # Check for active hold/event first
@@ -111,31 +112,20 @@ class TemperatureController:
         logger.warning("Could not determine current temperature setting")
         return None
 
-    def set_temperature(self, target_temp: int, thermostat_id: Optional[str] = None,
-                       duration_minutes: int = 60) -> bool:
+    def set_temperature(self, target_temp: int, thermostat_id: str | None = None,
+                        duration_minutes: int = 60) -> bool:
         """
-        Set thermostat temperature hold
+        Set thermostat temperature hold.
 
         Args:
             target_temp: Target temperature in Fahrenheit
             thermostat_id: Optional thermostat ID (uses first if not specified)
-            duration_minutes: Duration of hold in minutes (default 30 min)
+            duration_minutes: Duration of hold in minutes (default 60 min)
 
-        Returns:
-            True if successful, False otherwise
+        Return True if successful, False otherwise.
         """
-        # Get thermostat info
-        thermostats = self.get_thermostats()
-        if not thermostats:
-            return False
-
-        # Use first thermostat if none specified
-        thermostat = thermostats[0] if not thermostat_id else None
-        if thermostat_id:
-            thermostat = next((t for t in thermostats if t['identifier'] == thermostat_id), None)
-
+        thermostat = self._get_thermostat(thermostat_id)
         if not thermostat:
-            logger.error(f"Thermostat {thermostat_id} not found")
             return False
 
         tid = thermostat['identifier']
@@ -143,7 +133,7 @@ class TemperatureController:
         # Convert Fahrenheit to Ecobee format (degrees F * 10)
         ecobee_temp = int(target_temp * 10)
 
-        url = f"{self.BASE_URL}/thermostat"
+        url = f"{self.base_url}/thermostat"
         headers = {
             'Authorization': f'Bearer {self.access_token}',
             'Content-Type': 'application/json'
@@ -204,9 +194,9 @@ class TemperatureController:
         logger.debug(f"Temperature comparison: current={current}°F, expected={expected}°F, diff={diff}°F, matches={matches}")
         return matches
 
-    def get_sensors(self, thermostat_id: Optional[str] = None) -> Optional[List[Dict]]:
+    def get_sensors(self, thermostat_id: str | None = None) -> list[dict] | None:
         """Get list of remote sensors with temperature and occupancy"""
-        url = f"{self.BASE_URL}/thermostat"
+        url = f"{self.base_url}/thermostat"
         params = {
             'format': 'json',
             'body': '{"selection":{"selectionType":"registered","selectionMatch":"","includeSensors":true}}'
@@ -222,11 +212,9 @@ class TemperatureController:
             data = response.json()
 
             thermostats = data.get('thermostatList', [])
-            if not thermostats:
-                return None
-
-            thermostat = thermostats[0] if not thermostat_id else next(
-                (t for t in thermostats if t['identifier'] == thermostat_id), None
+            thermostat = (
+                thermostats[0] if not thermostat_id
+                else next((t for t in thermostats if t['identifier'] == thermostat_id), None)
             )
             if not thermostat:
                 return None
@@ -252,12 +240,12 @@ class TemperatureController:
             logger.error(f"Unexpected error getting sensors: {e}")
             return None
 
-    def get_climate_sensor_info(self, thermostat_id: Optional[str] = None) -> Optional[Dict]:
+    def get_climate_sensor_info(self, thermostat_id: str | None = None) -> dict | None:
         """
         Fetch thermostat with program and sensor data.
         Returns dict with: thermostat_id, current_climate_ref, climates, raw_sensors
         """
-        url = f"{self.BASE_URL}/thermostat"
+        url = f"{self.base_url}/thermostat"
         params = {
             'format': 'json',
             'body': '{"selection":{"selectionType":"registered","selectionMatch":"","includeProgram":true,"includeSensors":true,"includeEvents":true}}'
@@ -273,11 +261,9 @@ class TemperatureController:
             data = response.json()
 
             thermostats = data.get('thermostatList', [])
-            if not thermostats:
-                return None
-
-            thermostat = thermostats[0] if not thermostat_id else next(
-                (t for t in thermostats if t['identifier'] == thermostat_id), None
+            thermostat = (
+                thermostats[0] if not thermostat_id
+                else next((t for t in thermostats if t['identifier'] == thermostat_id), None)
             )
             if not thermostat:
                 return None
@@ -320,8 +306,8 @@ class TemperatureController:
             logger.error(f"Unexpected error getting climate/sensor info: {e}")
             return None
 
-    def select_sensors_toward_target(self, raw_sensors: List[Dict], target_temp: float,
-                                      climate_sensor_map: Optional[Dict] = None) -> List[Dict]:
+    def select_sensors_toward_target(self, raw_sensors: list[dict], target_temp: float,
+                                      climate_sensor_map: dict | None = None) -> list[dict]:
         """
         From all remote sensors, pick the subset whose average is closest to target_temp.
         Strategy: if current average > target, prefer cooler sensors; if below, prefer warmer.
@@ -365,8 +351,8 @@ class TemperatureController:
         return result
 
     def build_climate_update_body(self, thermostat_id: str, climate_ref: str,
-                                  all_climates: List[Dict], selected_sensors: List[Dict],
-                                  schedule: Optional[List] = None) -> Dict:
+                                  all_climates: list[dict], selected_sensors: list[dict],
+                                  schedule: list | None = None) -> dict:
         """Build the POST body for a climate sensor update (exposed for dry-run/debugging)"""
         updated_climates = []
         for climate in all_climates:
@@ -390,14 +376,14 @@ class TemperatureController:
         }
 
     def update_climate_sensors(self, thermostat_id: str, climate_ref: str,
-                               all_climates: List[Dict], selected_sensors: List[Dict],
-                               schedule: Optional[List] = None) -> bool:
+                               all_climates: list[dict], selected_sensors: list[dict],
+                               schedule: list | None = None) -> bool:
         """
         Update sensor participation for a climate.
         Sends all climates back with only the target climate's sensor list changed.
         Only writable fields are included to avoid 500 errors from read-only fields.
         """
-        url = f"{self.BASE_URL}/thermostat"
+        url = f"{self.base_url}/thermostat"
         headers = {
             'Authorization': f'Bearer {self.access_token}',
             'Content-Type': 'application/json'
@@ -427,11 +413,11 @@ class TemperatureController:
             return False
 
     def update_night_schedule(self, temp: int, climate_ref: str = "sleep",
-                              alt_climate_ref: Optional[str] = None,
+                              alt_climate_ref: str | None = None,
                               start_hour: int = 23, end_hour: int = 6,
-                              thermostat_id: Optional[str] = None,
+                              thermostat_id: str | None = None,
                               update_heat_temp: bool = True,
-                              dry_run: bool = False) -> bool:
+                              dry_run: bool = False) -> bool | dict:
         """
         Update the Ecobee program from start_hour to end_hour every day of the week.
 
@@ -512,7 +498,7 @@ class TemperatureController:
         if dry_run:
             return body
 
-        url = f"{self.BASE_URL}/thermostat"
+        url = f"{self.base_url}/thermostat"
         headers = {
             'Authorization': f'Bearer {self.access_token}',
             'Content-Type': 'application/json'
@@ -546,17 +532,9 @@ class TemperatureController:
             logger.error(f"Unexpected error updating night schedule: {e}")
             return False
 
-    def get_thermostat_info(self, thermostat_id: Optional[str] = None) -> Optional[Dict]:
-        """Get detailed thermostat information"""
-        thermostats = self.get_thermostats()
-        if not thermostats:
-            return None
-
-        # Use first thermostat if none specified
-        thermostat = thermostats[0] if not thermostat_id else None
-        if thermostat_id:
-            thermostat = next((t for t in thermostats if t['identifier'] == thermostat_id), None)
-
+    def get_thermostat_info(self, thermostat_id: str | None = None) -> dict | None:
+        """Get detailed thermostat information."""
+        thermostat = self._get_thermostat(thermostat_id)
         if not thermostat:
             return None
 

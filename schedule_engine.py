@@ -6,44 +6,52 @@ Handles parsing and lookup of temperature windows
 
 import json
 import logging
+from dataclasses import dataclass
 from datetime import datetime, time as dt_time
-from typing import Optional, Dict, List
 from pathlib import Path
+
 import pytz
 
 logger = logging.getLogger(__name__)
 
 
+@dataclass
 class TimeWindow:
-    """Represents a named time window with a target temperature"""
+    """Represents a named time window with a target temperature."""
 
-    def __init__(self, name: str, start: str, end: str, temperature: int, enabled: bool = True):
-        self.name = name
-        self.start = datetime.strptime(start, "%H:%M").time()
-        self.end = datetime.strptime(end, "%H:%M").time()
-        self.temperature = temperature
-        self.enabled = enabled
+    name: str
+    start: dt_time
+    end: dt_time
+    temperature: int
+    enabled: bool = True
+
+    @classmethod
+    def from_config(cls, entry: dict) -> "TimeWindow":
+        """Create a TimeWindow from a schedule config dict."""
+        return cls(
+            name=entry['name'],
+            start=datetime.strptime(entry['start'], "%H:%M").time(),
+            end=datetime.strptime(entry['end'], "%H:%M").time(),
+            temperature=int(entry['temperature']),
+            enabled=entry.get('enabled', True),
+        )
 
     def contains(self, t: dt_time) -> bool:
-        """Return True if time t falls within this window (handles midnight crossing)"""
+        """Return True if t falls within this window (handles midnight crossing)."""
         if self.start < self.end:
             return self.start <= t < self.end
-        else:
-            # Window crosses midnight (e.g. 19:00–06:00)
-            return t >= self.start or t < self.end
-
-    def __repr__(self):
-        return f"TimeWindow(name={self.name}, {self.start}–{self.end}, {self.temperature}°F, enabled={self.enabled})"
+        # Window crosses midnight (e.g. 19:00–06:00)
+        return t >= self.start or t < self.end
 
 
 class ScheduleEngine:
-    """Manages temperature windows and lookups"""
+    """Manages temperature windows and lookups."""
 
     def __init__(self, schedule_file: str = "config/schedule.json"):
         self.schedule_file = schedule_file
         self.timezone = None
-        self.windows: List[TimeWindow] = []
-        self.default_temperature: Optional[int] = None
+        self.windows: list[TimeWindow] = []
+        self.default_temperature: int | None = None
         self.last_modified = None
 
     def load_schedule(self) -> bool:
@@ -72,13 +80,7 @@ class ScheduleEngine:
             self.windows = []
             for entry in data.get('windows', []):
                 try:
-                    self.windows.append(TimeWindow(
-                        name=entry['name'],
-                        start=entry['start'],
-                        end=entry['end'],
-                        temperature=int(entry['temperature']),
-                        enabled=entry.get('enabled', True),
-                    ))
+                    self.windows.append(TimeWindow.from_config(entry))
                 except (KeyError, ValueError) as e:
                     logger.warning(f"Invalid window entry {entry}: {e}")
 
@@ -111,7 +113,7 @@ class ScheduleEngine:
             logger.error(f"Error checking schedule updates: {e}")
         return False
 
-    def get_expected_temperature(self, dt: Optional[datetime] = None) -> Optional[int]:
+    def get_expected_temperature(self, dt: datetime | None = None) -> int | None:
         """
         Get expected temperature for the given datetime.
         Returns the temperature of the first matching enabled window,
@@ -136,11 +138,11 @@ class ScheduleEngine:
         logger.debug(f"Time {current_time} is outside all active windows")
         return None
 
-    def get_windows(self) -> List[TimeWindow]:
+    def get_windows(self) -> list[TimeWindow]:
         """Return the list of configured windows"""
         return self.windows
 
-    def get_schedule_summary(self) -> Dict:
+    def get_schedule_summary(self) -> dict:
         """Get a summary of the current schedule"""
         return {
             'timezone': str(self.timezone),
@@ -156,7 +158,7 @@ class ScheduleEngine:
             ]
         }
 
-    def validate_schedule(self) -> List[str]:
+    def validate_schedule(self) -> list[str]:
         """Validate the schedule and return a list of warnings/errors"""
         warnings = []
 
