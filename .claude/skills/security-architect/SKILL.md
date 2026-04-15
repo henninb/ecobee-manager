@@ -1,5 +1,5 @@
 ---
-name: secure-review
+name: security-architect
 description: Security practitioner that reviews and writes code with security as the top priority
 ---
 
@@ -9,7 +9,12 @@ When invoked, you will:
 
 ## Security Review Process
 
-1. **Threat model the code** — identify trust boundaries, data flows, and attack surfaces before writing or reviewing any code.
+1. **Threat model the code** — before reviewing any code, produce:
+   - A list of trust boundaries (e.g., public API → service layer → database)
+   - Data flows for sensitive inputs (credentials, PII, tokens)
+   - The attack surface: every entry point (REST endpoints, GraphQL operations, file uploads, background jobs)
+   - Identified threat actors and their capabilities (unauthenticated user, authenticated user, compromised service account)
+   Only proceed to code review after this is documented.
 
 2. **Check for OWASP Top 10 vulnerabilities**:
    - Injection (SQL, command, LDAP, XPath, NoSQL)
@@ -48,18 +53,56 @@ When invoked, you will:
 
 5. **Language-specific patterns to check** (apply whichever is relevant to the language in scope):
    - **JavaScript/TypeScript**: `innerHTML`, `dangerouslySetInnerHTML`, `document.write`, `eval`, prototype pollution, insecure `postMessage` handlers, `child_process.exec` with user input
-   - **Java**: `Runtime.exec`, `ProcessBuilder` with user input, Java deserialization (`ObjectInputStream`), Spring `@RequestMapping` without CSRF protection, XXE via `DocumentBuilderFactory`
-   - **Go**: `os/exec` with user-controlled args, `text/template` vs `html/template` misuse, integer overflow in slice bounds
-   - **Rust**: `unsafe` blocks touching user data, raw pointer dereference from external input
-   - **C/C++**: `strcpy`, `sprintf`, `gets`, unbounded `memcpy`, format string vulnerabilities, integer overflow before allocation
-   - **Ruby**: `eval`, `send` with user input, `YAML.load` (use `safe_load`), shell via backticks or `system`
-   - **PHP**: `eval`, `include`/`require` with user input, `unserialize`, `$_GET`/`$_POST` directly in queries or output
+   - **Python (IoT / OAuth)**: `eval`, `exec`, `os.system`, `subprocess.call(shell=True)` with user input, `pickle.loads` / `yaml.load` (use `safe_load`), JWT tokens or OAuth tokens stored in plaintext JSON files (`ecobee_jwt.json`, `token.json`) committed to version control — add to `.gitignore` and restrict permissions to `0600`, Ecobee API keys or client secrets hardcoded in source instead of environment variables, thermostat command parameters (temperature setpoints, HVAC mode) not validated before sending to the Ecobee API (range and enum checks required), `health_server.py` or status endpoints exposing internal state without authentication, diagnostic scripts or CLI tools printing tokens or credentials to stdout, missing token rotation — refresh tokens must be stored securely and rotated on use, SSRF if the Ecobee API base URL is configurable via user input or config without allowlisting
    - **Shell scripts**: unquoted variables, `eval` with user input, missing input validation before use in commands
-   - **Python**: `eval`, `exec`, `os.system`, `subprocess.call(shell=True)` with user input, `pickle.loads` / `yaml.load` (use `safe_load`), `__import__` or `importlib` with user-controlled names
-   - **Kotlin**: `Runtime.exec` / `ProcessBuilder` with user input, Java interop deserialization (`ObjectInputStream`), Android `WebView.evaluateJavascript` with untrusted content, exported `Activity`/`BroadcastReceiver` without permission checks, hardcoded secrets in `BuildConfig` or `strings.xml`
    - **Dart/Flutter**: `dart:io` `Process.run` with user input, insecure `http` (use `https`), hardcoded secrets in `pubspec.yaml` or source, missing certificate pinning in mobile apps, `jsonDecode` on untrusted input passed directly to logic without validation
 
-6. **Additional security concerns**:
+6. **JWT security**:
+   - Flag algorithm confusion attacks — verify the server explicitly pins the expected algorithm (`HS256`, `RS256`); reject tokens with `alg: none`
+   - Flag missing claim validation: `exp` (expiry), `iss` (issuer), `aud` (audience) must all be validated on every request
+   - Flag weak HMAC secrets — JWT signing keys must be cryptographically random and at minimum 256 bits; dictionary words or short strings are insufficient
+   - Flag JWK endpoint exposure that allows attackers to supply their own public key
+   - Flag tokens stored in `localStorage` (XSS-accessible); prefer HttpOnly cookies or short-lived in-memory storage
+   - Flag missing token revocation strategy for logout and account compromise scenarios
+
+7. **GraphQL security**:
+   - Flag introspection enabled in production — it maps the entire schema for attackers; disable or restrict to authenticated admin users
+   - Flag missing query depth and complexity limits — unbounded nested queries enable DoS; require explicit `maxDepth` and `maxComplexity` configuration
+   - Flag batching amplification — multiple operations in a single request can amplify the cost of expensive resolvers; require per-request operation limits
+   - Flag field-level authorization gaps — verify that resolvers enforce authorization independently, not only at the top-level query/mutation
+   - Flag N+1 resolver patterns that are exploitable for timing-based enumeration or resource exhaustion
+   - Flag CSRF protection gaps on the `/graphql` endpoint for mutation operations
+
+8. **Multi-tenancy and tenant isolation**:
+   - Flag any query that does not scope results by the authenticated owner/tenant — IDOR across tenants is a critical finding
+   - Flag owner/tenant ID accepted from client input (request body, query params, headers) — tenant context must be derived server-side from the authenticated principal only
+   - Flag check-then-act patterns where tenant ownership is verified in application code but not enforced at the database query level
+   - Flag shared caches, background jobs, or async processing that can leak tenant data across boundaries
+
+9. **File upload security**:
+   - Flag missing file size limits — unbounded uploads enable storage exhaustion and DoS
+   - Flag MIME type validation based on file extension only — check magic bytes (file signature), not the `Content-Type` header or filename
+   - Flag path traversal via user-controlled filenames — canonicalize and strip directory components before any file system operation
+   - Flag decompression bombs — ZIP/archive formats can expand to gigabytes from kilobytes; enforce limits on extracted size and entry count
+   - Flag uploaded files stored in a web-accessible path — store outside the web root or in object storage; never serve user-uploaded files from the same origin without strict Content-Disposition and Content-Type headers
+
+10. **Business logic security (financial applications)**:
+    - Flag missing non-negative validation on monetary amounts — negative values can reverse the direction of a transfer or payment; enforce at the API boundary
+    - Flag use of `Float` or `Double` for monetary values — floating point arithmetic produces rounding errors in financial calculations; require `BigDecimal` with explicit scale and `RoundingMode`
+    - Flag missing idempotency controls on payment and transfer endpoints — duplicate submissions must not result in double-processing; require idempotency keys or database-level deduplication
+    - Flag state machine violations — verify that transitions between transaction states are explicitly allowed; reject any attempt to transition to an invalid state
+    - Flag missing audit trail on financial mutations — every create, update, and delete on financial records must be logged with actor identity, timestamp, before/after values, and source IP
+    - Flag insufficient authorization granularity — read access and write access to financial data should be separate permissions
+
+11. **HTTP security response headers**:
+    - Flag missing `Content-Security-Policy` — a permissive or absent CSP enables XSS escalation; define explicit `default-src`, `script-src`, and `object-src` directives
+    - Flag missing `X-Frame-Options: DENY` or `frame-ancestors 'none'` in CSP — without it, the app is vulnerable to clickjacking
+    - Flag missing `X-Content-Type-Options: nosniff` — browsers will MIME-sniff responses and may execute content as a different type
+    - Flag missing `Strict-Transport-Security` (HSTS) — without it, clients can be downgraded to HTTP; set `max-age` of at least one year with `includeSubDomains`
+    - Flag missing `Referrer-Policy` — without it, sensitive URL parameters leak to third-party origins in the `Referer` header
+    - Flag `Cache-Control` not set to `no-store` on authenticated API responses — cached responses in shared proxies or browser history can expose sensitive data to subsequent users
+
+12. **Additional security concerns**:
    - **Supply chain / dependency security**: flag unpinned dependency versions, missing lockfiles, packages installed from untrusted or unofficial sources, typosquatted package names, and `postinstall` scripts that execute arbitrary code
    - **Race conditions / TOCTOU**: flag check-then-act patterns on files, database rows, or shared state that lack atomic operations or proper locking (e.g., checking existence before writing without a transaction)
    - **Timing attacks**: flag non-constant-time comparisons for secrets, tokens, MACs, or passwords — require constant-time equality functions (e.g., `hmac.compare_digest`, `crypto.timingSafeEqual`)
