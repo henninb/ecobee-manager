@@ -6,11 +6,12 @@ Reads JWT from ecobee_jwt.json
 Usage:
     python ecobee_cli.py status          # Show thermostat info
     python ecobee_cli.py get             # Get current temperature setting
-    python ecobee_cli.py set <temp>      # Set temperature (°F)
+    python ecobee_cli.py set <temp>      # Set temperature (°F) — heat hold
     python ecobee_cli.py sensors         # List all sensors with temp and occupancy
     python ecobee_cli.py lean <temp>     # Pick sensors that pull the average toward <temp>
     python ecobee_cli.py schedule        # Show current Ecobee program schedule
-    python ecobee_cli.py schedule-night  # Set Ecobee program: alternate sleep/smart1 every hour all day
+    python ecobee_cli.py schedule-night  # Winter: alternate sleep/smart1 every hour all day at 67°F heat
+    python ecobee_cli.py schedule-day    # Summer: home/away 74°F (6am-8pm), sleep 72°F (night)
 """
 
 import sys
@@ -21,7 +22,9 @@ from datetime import datetime, timezone
 from temperature_controller import TemperatureController
 
 JWT_FILE = "ecobee_jwt.json"
-DEFAULT_HEAT_TEMP = 67  # °F — the nightly setpoint this service enforces
+DEFAULT_HEAT_TEMP = 67       # °F — winter nightly heat setpoint
+DEFAULT_COOL_DAY_TEMP = 74   # °F — summer daytime cooling setpoint
+DEFAULT_COOL_NIGHT_TEMP = 72  # °F — summer nighttime cooling setpoint
 
 
 def load_token() -> dict:
@@ -226,6 +229,46 @@ def print_program_schedule(info: dict):
             print(f"{label:<12} {time_range:<14} {name:<10} {heat:>6}  {cool:>6}")
 
 
+def cmd_schedule_day(controller: TemperatureController, args):
+    """Set the Ecobee program to a summer cooling schedule.
+
+    Day (6am–8pm): alternates home/away at 74°F cool.
+    Night (8pm–6am): sleep at 72°F cool.
+    """
+    dry_run = '--dry-run' in args
+
+    result = controller.update_day_schedule(
+        day_temp=DEFAULT_COOL_DAY_TEMP,
+        night_temp=DEFAULT_COOL_NIGHT_TEMP,
+        day_climate_ref="home",
+        day_alt_climate_ref="away",
+        night_climate_ref="sleep",
+        day_start_hour=6,
+        day_end_hour=20,
+        dry_run=dry_run,
+    )
+
+    if dry_run:
+        if not isinstance(result, dict):
+            print("Error: Could not fetch thermostat data for dry-run — check that your token is valid")
+            sys.exit(1)
+        print("=== DRY RUN: POST body ===")
+        print(json.dumps(result, indent=2))
+        return
+
+    if not result:
+        print("Error: Failed to update day schedule")
+        sys.exit(1)
+
+    print("Done: Ecobee program updated.")
+
+    info = controller.get_climate_sensor_info()
+    if info:
+        print_program_schedule(info)
+    else:
+        print("Warning: Could not fetch updated schedule for display.")
+
+
 def cmd_schedule_night(controller: TemperatureController, args):
     """Set the Ecobee program to alternate sleep/smart1 every hour across all 24 hours every day."""
     dry_run = '--dry-run' in args
@@ -236,6 +279,9 @@ def cmd_schedule_night(controller: TemperatureController, args):
     )
 
     if dry_run:
+        if not isinstance(result, dict):
+            print("Error: Could not fetch thermostat data for dry-run — check that your token is valid")
+            sys.exit(1)
         print("=== DRY RUN: POST body ===")
         print(json.dumps(result, indent=2))
         return
@@ -311,6 +357,8 @@ def main():
         cmd_schedule(controller)
     elif command == "schedule-night":
         cmd_schedule_night(controller, args)
+    elif command == "schedule-day":
+        cmd_schedule_day(controller, args)
     elif command == "status":
         cmd_status(controller)
     elif command == "get":
@@ -325,7 +373,7 @@ def main():
         cmd_dump_program(controller)
     else:
         print(f"Unknown command: {command}")
-        print("Commands: status, get, set <temp>, sensors, lean <temp>, schedule, schedule-night")
+        print("Commands: status, get, set <temp>, sensors, lean <temp>, schedule, schedule-night, schedule-day")
         sys.exit(1)
 
 

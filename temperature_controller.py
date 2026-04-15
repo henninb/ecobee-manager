@@ -412,6 +412,192 @@ class TemperatureController:
             logger.error(f"Unexpected error updating climate sensors: {e}")
             return False
 
+    def set_cool_temperature(self, target_temp: int, thermostat_id: str | None = None,
+                             duration_minutes: int = 60) -> bool:
+        """
+        Set a cooling hold on the thermostat.
+
+        Sets coolHoldTemp to target_temp and heatHoldTemp to 60°F so heating
+        will not trigger during a summer hold.
+
+        Args:
+            target_temp: Target cooling temperature in Fahrenheit
+            thermostat_id: Optional thermostat ID (uses first if not specified)
+            duration_minutes: Duration of hold in minutes (default 60 min)
+
+        Return True if successful, False otherwise.
+        """
+        thermostat = self._get_thermostat(thermostat_id)
+        if not thermostat:
+            return False
+
+        tid = thermostat['identifier']
+        cool_ecobee = target_temp * 10
+        heat_ecobee = 600  # 60°F — low enough to never trigger heating
+
+        url = f"{self.base_url}/thermostat"
+        headers = {
+            'Authorization': f'Bearer {self.access_token}',
+            'Content-Type': 'application/json',
+        }
+        body = {
+            "selection": {
+                "selectionType": "thermostats",
+                "selectionMatch": tid,
+            },
+            "functions": [
+                {
+                    "type": "setHold",
+                    "params": {
+                        "holdType": "holdHours",
+                        "holdHours": duration_minutes // 60 if duration_minutes >= 60 else 1,
+                        "heatHoldTemp": heat_ecobee,
+                        "coolHoldTemp": cool_ecobee,
+                    }
+                }
+            ],
+        }
+
+        try:
+            response = requests.post(url, json=body, headers=headers, timeout=10)
+            response.raise_for_status()
+            result = response.json()
+            status = result.get('status', {})
+            if status.get('code') == 0:
+                logger.info(f"Successfully set cool temperature to {target_temp}°F")
+                return True
+            else:
+                logger.error(f"API returned error: {status}")
+                return False
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error setting cool temperature: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error setting cool temperature: {e}")
+            return False
+
+    def update_day_schedule(
+        self,
+        day_temp: int,
+        night_temp: int,
+        day_climate_ref: str = "home",
+        day_alt_climate_ref: str | None = "away",
+        night_climate_ref: str = "sleep",
+        day_start_hour: int = 6,
+        day_end_hour: int = 20,
+        thermostat_id: str | None = None,
+        dry_run: bool = False,
+    ) -> bool | dict:
+        """
+        Update the Ecobee program for a summer cooling schedule.
+
+        Day window (day_start_hour to day_end_hour): alternates day_climate_ref
+        and day_alt_climate_ref every hour; sets coolTemp on both to day_temp.
+        Night window (remaining hours): sets night_climate_ref with coolTemp = night_temp.
+
+        Args:
+            day_temp: Cooling setpoint in °F for daytime window
+            night_temp: Cooling setpoint in °F for nighttime window
+            day_climate_ref: Primary climate ref for day slots (default "home")
+            day_alt_climate_ref: Alternating climate ref for day slots (default "away")
+            night_climate_ref: Climate ref for night slots (default "sleep")
+            day_start_hour: Hour (0–23) when daytime window begins
+            day_end_hour: Hour (0–23) when daytime window ends (exclusive)
+            thermostat_id: Optional thermostat ID (uses first if not specified)
+            dry_run: If True, return the POST body instead of sending it
+
+        Return True if successful, False otherwise (or the POST body dict on dry_run).
+        """
+        info = self.get_climate_sensor_info(thermostat_id)
+        if not info:
+            return False
+
+        tid = info['thermostat_id']
+        climates = info['climates']
+        schedule = info['schedule']
+
+        available = [c.get('climateRef') for c in climates]
+        for ref in filter(None, [day_climate_ref, day_alt_climate_ref, night_climate_ref]):
+            if ref not in available:
+                logger.error(f"Climate '{ref}' not found. Available: {available}")
+                return False
+
+        day_ecobee_temp = day_temp * 10
+        night_ecobee_temp = night_temp * 10
+
+        day_refs = {day_climate_ref, day_alt_climate_ref} - {None}
+        updated_climates = []
+        for climate in climates:
+            ref = climate.get('climateRef')
+            if ref in day_refs:
+                updated_climates.append({**climate, 'coolTemp': day_ecobee_temp})
+            elif ref == night_climate_ref:
+                updated_climates.append({**climate, 'coolTemp': night_ecobee_temp})
+            else:
+                updated_climates.append(climate)
+
+        day_hours = list(range(day_start_hour, day_end_hour))
+        night_hours = list(range(0, day_start_hour)) + list(range(day_end_hour, 24))
+
+        updated_schedule = []
+        for day_slots in schedule:
+            updated_day = list(day_slots)
+            for i, hour in enumerate(day_hours):
+                ref = day_alt_climate_ref if (day_alt_climate_ref and i % 2 == 1) else day_climate_ref
+                slot = hour * 2
+                updated_day[slot] = ref
+                updated_day[slot + 1] = ref
+            for hour in night_hours:
+                slot = hour * 2
+                updated_day[slot] = night_climate_ref
+                updated_day[slot + 1] = night_climate_ref
+            updated_schedule.append(updated_day)
+
+        body = {
+            "selection": {
+                "selectionType": "thermostats",
+                "selectionMatch": tid,
+            },
+            "thermostat": {
+                "program": {
+                    "climates": updated_climates,
+                    "schedule": updated_schedule,
+                }
+            },
+        }
+
+        if dry_run:
+            return body
+
+        url = f"{self.base_url}/thermostat"
+        headers = {
+            'Authorization': f'Bearer {self.access_token}',
+            'Content-Type': 'application/json',
+        }
+
+        try:
+            response = requests.post(url, json=body, headers=headers, timeout=10)
+            response.raise_for_status()
+            result = response.json()
+            status = result.get('status', {})
+            if status.get('code') == 0:
+                logger.info(
+                    f"Summer schedule updated: '{day_climate_ref}'/'{day_alt_climate_ref}' "
+                    f"at {day_temp}°F ({day_start_hour:02d}:00–{day_end_hour:02d}:00), "
+                    f"'{night_climate_ref}' at {night_temp}°F (night)"
+                )
+                return True
+            else:
+                logger.error(f"API error (code {status.get('code')}): {status.get('message', status)}")
+                return False
+        except requests.exceptions.RequestException as e:
+            resp_text = e.response.text if e.response is not None else "no response"
+            logger.error(f"Error updating day schedule: {e} — response: {resp_text}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error updating day schedule: {e}")
+            return False
+
     def update_night_schedule(self, temp: int, climate_ref: str = "sleep",
                               alt_climate_ref: str | None = None,
                               start_hour: int = 23, end_hour: int = 6,

@@ -1,0 +1,20 @@
+{
+  "timezone": "America/Chicago",
+  "default_temperature": 74,
+  "windows": [
+    {
+      "name": "day",
+      "start": "06:00",
+      "end": "20:00",
+      "temperature": 74,
+      "enabled": true
+    },
+    {
+      "name": "night",
+      "start": "20:00",
+      "end": "06:00",
+      "temperature": 72,
+      "enabled": true
+    }
+  ]
+}
