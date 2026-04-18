@@ -216,12 +216,12 @@ class HealthServer:
         """Start the health server in a background thread using waitress."""
         def run_server():
             from waitress import serve
-            logger.info(f"Starting health server on 127.0.0.1:{self.port}")
-            serve(self.app, host='127.0.0.1', port=self.port, threads=4)
+            logger.info(f"Starting health server on 0.0.0.0:{self.port}")
+            serve(self.app, host='0.0.0.0', port=self.port, threads=4)
 
         self.server_thread = threading.Thread(target=run_server, daemon=True)
         self.server_thread.start()
-        logger.info(f"Health server started on http://127.0.0.1:{self.port}")
+        logger.info(f"Health server started on http://0.0.0.0:{self.port}")
 
     def is_running(self) -> bool:
         """Check if server is running"""
