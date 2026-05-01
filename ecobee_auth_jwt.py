@@ -28,6 +28,18 @@ logger = logging.getLogger(__name__)
 
 _JWKS_URI = "https://auth.ecobee.com/.well-known/jwks.json"
 _ECOBEE_AUDIENCE = "https://prod.ecobee.com/api/v1"
+_AUTH_URL = (
+    "https://auth.ecobee.com/authorize"
+    "?response_type=token&response_mode=form_post"
+    "&client_id=183eORFPlXyz9BbDZwqexHPBQoVjgadh"
+    "&redirect_uri=https://www.ecobee.com/home/authCallback"
+    "&audience=https://prod.ecobee.com/api/v1"
+    "&scope=openid%20smartWrite%20piiWrite%20piiRead%20smartRead%20deleteGrants"
+)
+_SLEEP_AFTER_INPUT = 2   # seconds — wait for JS frameworks to enable submit button
+_SLEEP_AFTER_LOGIN = 5   # seconds — wait for cookies to be fully set after redirect
+_SLEEP_FOR_PORTAL = 8    # seconds — wait for portal to fire its API calls
+
 _jwks_client: PyJWKClient | None = None
 
 
@@ -188,6 +200,28 @@ class EcobeeAuthJWT:
             except Exception as e:
                 logger.warning(f"Error closing driver: {e}")
 
+    def _fill_input_field(self, element, value: str) -> None:
+        """Fill a form field via JavaScript events (compatible with React/Vue frameworks)."""
+        self.driver.execute_script(
+            """
+            var el = arguments[0], val = arguments[1];
+            el.value = val;
+            el.dispatchEvent(new Event('input',  { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            el.dispatchEvent(new Event('blur',   { bubbles: true }));
+            """,
+            element,
+            value,
+        )
+
+    def _click_submit_button(self, wait: "WebDriverWait", action: str) -> None:
+        """Click the active submit button via JavaScript and log the action name."""
+        button = wait.until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "button[type='submit']"))
+        )
+        self.driver.execute_script("arguments[0].click();", button)
+        logger.debug(f"'{action}' button clicked")
+
     def login_and_extract_token(self, headless: bool = True) -> bool:
         """
         Login to Ecobee web portal via Auth0 and extract JWT from _TOKEN cookie
@@ -198,73 +232,38 @@ class EcobeeAuthJWT:
         try:
             self._init_driver(headless)
 
-            # Direct Auth0 login URL
-            auth_url = "https://auth.ecobee.com/authorize?response_type=token&response_mode=form_post&client_id=183eORFPlXyz9BbDZwqexHPBQoVjgadh&redirect_uri=https://www.ecobee.com/home/authCallback&audience=https://prod.ecobee.com/api/v1&scope=openid%20smartWrite%20piiWrite%20piiRead%20smartRead%20deleteGrants"
-
             logger.info("Navigating to Ecobee Auth0 login page...")
-            self.driver.get(auth_url)
+            self.driver.get(_AUTH_URL)
 
-            # Use configurable timeout for element waits
             wait = WebDriverWait(self.driver, self.selenium_timeout)
-            logger.debug(f"Using Selenium timeout: {self.selenium_timeout}s for elements, {self.selenium_redirect_timeout}s for redirect")
+            logger.debug(
+                f"Selenium timeouts: {self.selenium_timeout}s (elements), "
+                f"{self.selenium_redirect_timeout}s (redirect)"
+            )
 
-            # Step 1: Wait for and fill email (Auth0 uses "username" for email field)
+            # Step 1: Fill email (Auth0 uses "username" for the email field)
             logger.debug("Waiting for email field...")
             email_field = wait.until(EC.presence_of_element_located((By.ID, "username")))
+            self._fill_input_field(email_field, self.email)
+            time.sleep(_SLEEP_AFTER_INPUT)
 
-            # Use JavaScript to set value and trigger events (works better with modern frameworks)
-            logger.debug("Setting email value...")
-            self.driver.execute_script("""
-                var element = arguments[0];
-                var value = arguments[1];
-                element.value = value;
-                element.dispatchEvent(new Event('input', { bubbles: true }));
-                element.dispatchEvent(new Event('change', { bubbles: true }));
-                element.dispatchEvent(new Event('blur', { bubbles: true }));
-            """, email_field, self.email)
-
-            # Give the page a moment to process and enable the button
-            time.sleep(2)
-
-            # Click Continue button to go to password page
-            logger.debug("Clicking Continue button...")
             try:
-                continue_button = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "button[type='submit']")))
-                # Use JavaScript click to bypass visibility checks
-                self.driver.execute_script("arguments[0].click();", continue_button)
-                logger.debug("Continue button clicked")
+                self._click_submit_button(wait, "Continue")
             except Exception as e:
-                logger.error(f"Failed to click continue button: {e}")
+                logger.error(f"Failed to click Continue button: {e}")
                 raise
 
-            # Step 2: Wait for password page to load and fill password
+            # Step 2: Fill password on the next page
             logger.debug("Waiting for password field...")
             password_field = wait.until(EC.presence_of_element_located((By.ID, "password")))
+            self._fill_input_field(password_field, self.password)
+            time.sleep(_SLEEP_AFTER_INPUT)
 
-            # Use JavaScript to set value and trigger events
-            logger.debug("Setting password value...")
-            self.driver.execute_script("""
-                var element = arguments[0];
-                var value = arguments[1];
-                element.value = value;
-                element.dispatchEvent(new Event('input', { bubbles: true }));
-                element.dispatchEvent(new Event('change', { bubbles: true }));
-                element.dispatchEvent(new Event('blur', { bubbles: true }));
-            """, password_field, self.password)
-            logger.debug("Password entered")
-
-            # Give the page a moment to process and enable the button
-            time.sleep(2)
-
-            # Click login button
-            logger.debug("Clicking login button...")
             try:
-                login_button = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "button[type='submit']")))
-                # Use JavaScript click to bypass visibility checks
-                self.driver.execute_script("arguments[0].click();", login_button)
-                logger.info("Login button clicked, waiting for authentication...")
+                self._click_submit_button(wait, "Login")
+                logger.info("Login submitted, waiting for authentication redirect...")
             except Exception as e:
-                logger.error(f"Failed to click login button: {e}")
+                logger.error(f"Failed to click Login button: {e}")
                 raise
 
             # Wait longer for redirect back to ecobee.com (this can be slow on remote servers)
@@ -272,7 +271,7 @@ class EcobeeAuthJWT:
             redirect_wait = WebDriverWait(self.driver, self.selenium_redirect_timeout)
             redirect_wait.until(lambda driver: "ecobee.com" in driver.current_url and "auth.ecobee.com" not in driver.current_url)
             logger.debug(f"Redirected to: {self.driver.current_url}")
-            time.sleep(5)  # Give extra time for cookies to be fully set
+            time.sleep(_SLEEP_AFTER_LOGIN)
 
             # Extract _TOKEN cookie
             logger.debug("Extracting _TOKEN cookie...")
@@ -296,10 +295,8 @@ class EcobeeAuthJWT:
 
             logger.info(f"Successfully extracted JWT token (expires: {self.token_expires_at})")
 
-            # Wait for the portal app to boot and fire its own API calls,
-            # then capture the real Bearer token and API base URL from those.
             logger.info("Waiting for portal to load and capture API context...")
-            time.sleep(8)
+            time.sleep(_SLEEP_FOR_PORTAL)
             self._capture_api_context_from_logs()
 
             # Save token
@@ -419,8 +416,10 @@ class EcobeeAuthJWT:
         try:
             config_path = Path(self.config_file)
             config_path.parent.mkdir(parents=True, exist_ok=True)
-            config_path.write_text(json.dumps(config, indent=2))
-            config_path.chmod(0o600)
+            tmp_path = config_path.with_suffix('.tmp')
+            tmp_path.write_text(json.dumps(config, indent=2))
+            tmp_path.chmod(0o600)
+            tmp_path.replace(config_path)  # atomic on POSIX — prevents partial reads
             logger.info(f"Saved JWT token to {self.config_file}")
         except Exception as e:
             logger.error(f"Error saving token: {e}")

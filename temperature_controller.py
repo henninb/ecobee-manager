@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 import requests
@@ -13,6 +14,7 @@ logger = logging.getLogger(__name__)
 _DEFAULT_BASE_URL = "https://api.ecobee.com/1"
 _TEMP_FACTOR = 10       # Ecobee stores setpoints as °F × 10
 _HEAT_FLOOR = 600       # 60 °F in Ecobee units — low enough to never trigger heating
+_DEFAULT_HTTP_TIMEOUT = int(os.getenv("ECOBEE_HTTP_TIMEOUT", "10"))
 
 
 def _to_ecobee(temp_f: int | float) -> int:
@@ -34,9 +36,15 @@ class TemperatureController:
 
     TEMPERATURE_TOLERANCE = 0.5  # ±0.5 °F
 
-    def __init__(self, access_token: str, base_url: str | None = None) -> None:
+    def __init__(
+        self,
+        access_token: str,
+        base_url: str | None = None,
+        timeout: int | None = None,
+    ) -> None:
         self.access_token = access_token
         self.base_url = base_url or _DEFAULT_BASE_URL
+        self.timeout = timeout if timeout is not None else _DEFAULT_HTTP_TIMEOUT
 
     def update_token(self, access_token: str) -> None:
         """Replace the bearer token used for subsequent API calls."""
@@ -57,7 +65,7 @@ class TemperatureController:
         """GET /thermostat; return parsed JSON or None on transport error."""
         url = f"{self.base_url}/thermostat"
         try:
-            response = requests.get(url, params=params, headers=self._headers, timeout=10)
+            response = requests.get(url, params=params, headers=self._headers, timeout=self.timeout)
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
@@ -68,7 +76,7 @@ class TemperatureController:
         """POST /thermostat; return parsed JSON or None on transport error."""
         url = f"{self.base_url}/thermostat"
         try:
-            response = requests.post(url, json=body, headers=self._headers, timeout=10)
+            response = requests.post(url, json=body, headers=self._headers, timeout=self.timeout)
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
@@ -114,6 +122,25 @@ class TemperatureController:
     def _get_thermostat(self, thermostat_id: str | None = None) -> dict | None:
         """Return the thermostat matching *thermostat_id*, or the first one found."""
         thermostats = self.get_thermostats()
+        if not thermostats:
+            return None
+        if thermostat_id is None:
+            return thermostats[0]
+        match = next(
+            (t for t in thermostats if t["identifier"] == thermostat_id), None
+        )
+        if match is None:
+            logger.error(f"Thermostat {thermostat_id} not found")
+        return match
+
+    def _fetch_thermostat_data(
+        self, body: str, thermostat_id: str | None = None
+    ) -> dict | None:
+        """GET /thermostat with *body* and return the matching thermostat dict."""
+        data = self._get({"format": "json", "body": body})
+        if data is None:
+            return None
+        thermostats = data.get("thermostatList", [])
         if not thermostats:
             return None
         if thermostat_id is None:
@@ -237,23 +264,10 @@ class TemperatureController:
 
     def get_sensors(self, thermostat_id: str | None = None) -> list[dict] | None:
         """Return remote sensors with temperature and occupancy data."""
-        data = self._get({
-            "format": "json",
-            "body": (
-                '{"selection":{"selectionType":"registered","selectionMatch":"",'
-                '"includeSensors":true}}'
-            ),
-        })
-        if data is None:
-            return None
-
-        thermostats = data.get("thermostatList", [])
-        thermostat = (
-            thermostats[0]
-            if thermostat_id is None
-            else next(
-                (t for t in thermostats if t["identifier"] == thermostat_id), None
-            )
+        thermostat = self._fetch_thermostat_data(
+            '{"selection":{"selectionType":"registered","selectionMatch":"",'
+            '"includeSensors":true}}',
+            thermostat_id,
         )
         if thermostat is None:
             return None
@@ -280,23 +294,10 @@ class TemperatureController:
         self, thermostat_id: str | None = None
     ) -> dict | None:
         """Return program, climate, and sensor data for a thermostat."""
-        data = self._get({
-            "format": "json",
-            "body": (
-                '{"selection":{"selectionType":"registered","selectionMatch":"",'
-                '"includeProgram":true,"includeSensors":true,"includeEvents":true}}'
-            ),
-        })
-        if data is None:
-            return None
-
-        thermostats = data.get("thermostatList", [])
-        thermostat = (
-            thermostats[0]
-            if thermostat_id is None
-            else next(
-                (t for t in thermostats if t["identifier"] == thermostat_id), None
-            )
+        thermostat = self._fetch_thermostat_data(
+            '{"selection":{"selectionType":"registered","selectionMatch":"",'
+            '"includeProgram":true,"includeSensors":true,"includeEvents":true}}',
+            thermostat_id,
         )
         if thermostat is None:
             return None

@@ -61,8 +61,7 @@ class ScheduleEngine:
                 logger.error(f"Schedule file not found: {self.schedule_file}")
                 return False
 
-            with open(self.schedule_file, 'r') as f:
-                data = json.load(f)
+            data = json.loads(Path(self.schedule_file).read_text())
 
             # Load timezone
             tz_str = data.get('timezone', 'America/Chicago')

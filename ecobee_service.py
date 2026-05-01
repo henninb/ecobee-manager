@@ -94,7 +94,11 @@ class EcobeeServiceJWT:
         """Initialize all service components.  Return False if any step fails."""
         self.logger.info("Initializing Ecobee Temperature Management Service (JWT)...")
 
-        load_secrets()
+        try:
+            load_secrets()
+        except RuntimeError as e:
+            self.logger.error(f"Failed to load secrets: {e}")
+            return False
 
         email = os.environ.get("ECOBEE_EMAIL")
         password = os.environ.get("ECOBEE_PASSWORD")

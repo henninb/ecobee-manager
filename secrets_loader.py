@@ -10,7 +10,8 @@ Existing environment variables are never overwritten (os.environ.setdefault).
 
 import os
 import subprocess
-import sys
+
+_GOPASS_TIMEOUT = 10  # seconds
 
 
 def _gopass_get(path: str) -> str:
@@ -19,14 +20,12 @@ def _gopass_get(path: str) -> str:
         ['gopass', 'show', path],
         capture_output=True,
         text=True,
+        timeout=_GOPASS_TIMEOUT,
     )
     if result.returncode != 0:
-        print(
-            f"Error: gopass failed to retrieve '{path}'.\n"
-            f"gopass stderr: {result.stderr.strip()}",
-            file=sys.stderr,
+        raise RuntimeError(
+            f"gopass failed to retrieve '{path}': {result.stderr.strip()}"
         )
-        sys.exit(1)
     return result.stdout.strip()
 
 
@@ -35,20 +34,16 @@ def load_secrets() -> None:
     if os.environ.get('ECOBEE_EMAIL') and os.environ.get('ECOBEE_PASSWORD'):
         return
 
-    if not _gopass_available():
-        print(
-            "Error: gopass is not installed or not in PATH.\n"
-            "Install gopass: https://github.com/gopasspw/gopass",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    os.environ.setdefault('ECOBEE_EMAIL', _gopass_get('ecobee/email'))
-    os.environ.setdefault('ECOBEE_PASSWORD', _gopass_get('ecobee/password'))
-
-
-def _gopass_available() -> bool:
-    return subprocess.run(
-        ['gopass', 'version'],
-        capture_output=True,
-    ).returncode == 0
+    try:
+        os.environ.setdefault('ECOBEE_EMAIL', _gopass_get('ecobee/email'))
+        os.environ.setdefault('ECOBEE_PASSWORD', _gopass_get('ecobee/password'))
+    except FileNotFoundError:
+        raise RuntimeError(
+            "gopass is not installed or not in PATH. "
+            "Install gopass: https://github.com/gopasspw/gopass"
+        ) from None
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            f"gopass timed out after {_GOPASS_TIMEOUT}s — "
+            "check that your gopass store is unlocked"
+        ) from None

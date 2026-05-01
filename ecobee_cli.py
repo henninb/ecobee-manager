@@ -18,6 +18,7 @@ import sys
 import json
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 
 from temperature_controller import TemperatureController
 
@@ -28,24 +29,23 @@ DEFAULT_COOL_NIGHT_TEMP = 72  # °F — summer nighttime cooling setpoint
 
 
 def load_token() -> dict:
-    if not os.path.exists(JWT_FILE):
-        print(f"Error: No token file found at {JWT_FILE}")
-        print("Set your JWT in that file first.")
-        sys.exit(1)
+    config_path = Path(JWT_FILE)
+    if not config_path.exists():
+        raise SystemExit(f"Error: No token file found at {JWT_FILE}\nSet your JWT in that file first.")
 
-    with open(JWT_FILE) as f:
-        config = json.load(f)
+    config = json.loads(config_path.read_text())
 
     token = config.get("jwt_token")
     if not token:
-        print("Error: No token found in config file")
-        sys.exit(1)
+        raise SystemExit("Error: No token found in config file")
 
     expires_at = config.get("token_expires_at")
     if expires_at:
         expiry = datetime.fromisoformat(expires_at)
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
         if datetime.now(timezone.utc) > expiry:
-            print(f"Warning: Token may be expired at {expiry}.")
+            print(f"Warning: Token expired at {expiry}.")
 
     return {
         "token": token,
@@ -115,7 +115,6 @@ def cmd_lean(controller: TemperatureController, args):
     print(f"Target temperature: {target}°F")
     print()
 
-    # Show all sensor readings
     for s in raw_sensors:
         caps = {c['type']: c['value'] for c in s.get('capability', [])}
         temp_raw = caps.get('temperature')
@@ -311,12 +310,11 @@ def cmd_schedule(controller: TemperatureController):
     if thermostat_info:
         desired_heat = thermostat_info['desired_heat']
         if desired_heat != DEFAULT_HEAT_TEMP:
-            print(f"\nDesired heat is {desired_heat}°F (not {DEFAULT_HEAT_TEMP}°F) — setting to {DEFAULT_HEAT_TEMP}°F...")
-            if controller.set_temperature(DEFAULT_HEAT_TEMP):
-                print(f"Done: Temperature set to {DEFAULT_HEAT_TEMP}°F")
-            else:
-                print("Error: Failed to set temperature")
-                sys.exit(1)
+            print(
+                f"\nNote: Desired heat is {desired_heat}°F "
+                f"(expected {DEFAULT_HEAT_TEMP}°F). "
+                f"Run 'set {DEFAULT_HEAT_TEMP}' to correct."
+            )
 
 
 def cmd_set(controller: TemperatureController, args):
@@ -353,28 +351,25 @@ def main():
     ctx = load_token()
     controller = TemperatureController(ctx["token"], base_url=ctx["base_url"])
 
-    if command == "schedule":
-        cmd_schedule(controller)
-    elif command == "schedule-night":
-        cmd_schedule_night(controller, args)
-    elif command == "schedule-day":
-        cmd_schedule_day(controller, args)
-    elif command == "status":
-        cmd_status(controller)
-    elif command == "get":
-        cmd_get(controller)
-    elif command == "set":
-        cmd_set(controller, args)
-    elif command == "sensors":
-        cmd_sensors(controller)
-    elif command == "lean":
-        cmd_lean(controller, args)
-    elif command == "dump-program":
-        cmd_dump_program(controller)
-    else:
+    commands = {
+        "schedule":       lambda: cmd_schedule(controller),
+        "schedule-night": lambda: cmd_schedule_night(controller, args),
+        "schedule-day":   lambda: cmd_schedule_day(controller, args),
+        "status":         lambda: cmd_status(controller),
+        "get":            lambda: cmd_get(controller),
+        "set":            lambda: cmd_set(controller, args),
+        "sensors":        lambda: cmd_sensors(controller),
+        "lean":           lambda: cmd_lean(controller, args),
+        "dump-program":   lambda: cmd_dump_program(controller),
+    }
+
+    handler = commands.get(command)
+    if handler is None:
         print(f"Unknown command: {command}")
-        print("Commands: status, get, set <temp>, sensors, lean <temp>, schedule, schedule-night, schedule-day")
+        print(f"Commands: {', '.join(commands)}")
         sys.exit(1)
+
+    handler()
 
 
 if __name__ == "__main__":
