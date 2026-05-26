@@ -157,16 +157,26 @@ class TemperatureController:
     # ------------------------------------------------------------------
 
     def get_current_temperature_setting(
-        self, thermostat_id: str | None = None
+        self, thermostat_id: str | None = None, mode: str = "heating"
     ) -> int | None:
-        """Return the active temperature setpoint in °F (hold overrides schedule)."""
+        """Return the active temperature setpoint in °F (hold overrides schedule).
+
+        Pass mode='cooling' to read the cool setpoint, 'heating' for heat.
+        """
         thermostat = self._get_thermostat(thermostat_id)
         if thermostat is None:
             return None
 
+        if mode == "cooling":
+            hold_keys = (("coolHoldTemp", "cool"), ("heatHoldTemp", "heat"))
+            runtime_keys = (("desiredCool", "cool"), ("desiredHeat", "heat"))
+        else:
+            hold_keys = (("heatHoldTemp", "heat"), ("coolHoldTemp", "cool"))
+            runtime_keys = (("desiredHeat", "heat"), ("desiredCool", "cool"))
+
         for event in thermostat.get("events", []):
             if event.get("running", False) and event.get("type") == "hold":
-                for key, label in (("heatHoldTemp", "heat"), ("coolHoldTemp", "cool")):
+                for key, label in hold_keys:
                     raw = event.get(key)
                     if raw is not None:
                         temp_f = _from_ecobee(raw)
@@ -174,7 +184,7 @@ class TemperatureController:
                         return int(temp_f)
 
         runtime = thermostat.get("runtime", {})
-        for key, label in (("desiredHeat", "heat"), ("desiredCool", "cool")):
+        for key, label in runtime_keys:
             raw = runtime.get(key)
             if raw is not None:
                 temp_f = _from_ecobee(raw)

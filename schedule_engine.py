@@ -47,9 +47,10 @@ class TimeWindow:
 class ScheduleEngine:
     """Manages temperature windows and lookups."""
 
-    def __init__(self, schedule_file: str = "config/schedule.json"):
+    def __init__(self, schedule_file: str = "config/schedule_winter.json"):
         self.schedule_file = schedule_file
         self.timezone = None
+        self.mode: str = "heating"
         self.windows: list[TimeWindow] = []
         self.default_temperature: int | None = None
         self.last_modified = None
@@ -70,6 +71,9 @@ class ScheduleEngine:
             except pytz.exceptions.UnknownTimeZoneError:
                 logger.warning(f"Unknown timezone: {tz_str}, using America/Chicago")
                 self.timezone = pytz.timezone('America/Chicago')
+
+            # Load mode (heating/cooling)
+            self.mode = data.get('mode', 'heating')
 
             # Load default temperature
             default = data.get('default_temperature')
@@ -177,7 +181,7 @@ class ScheduleEngine:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG)
 
-    engine = ScheduleEngine("config/schedule.json")
+    engine = ScheduleEngine("config/schedule_winter.json")
     if engine.load_schedule():
         print("\nSchedule loaded successfully!")
         print(f"\nCurrent expected temperature: {engine.get_expected_temperature()}")

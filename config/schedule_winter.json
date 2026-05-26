@@ -1,5 +1,6 @@
 {
   "timezone": "America/Chicago",
+  "mode": "heating",
   "default_temperature": 67,
   "windows": [
     {

@@ -416,10 +416,8 @@ class EcobeeAuthJWT:
         try:
             config_path = Path(self.config_file)
             config_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp_path = config_path.with_suffix('.tmp')
-            tmp_path.write_text(json.dumps(config, indent=2))
-            tmp_path.chmod(0o600)
-            tmp_path.replace(config_path)  # atomic on POSIX — prevents partial reads
+            config_path.write_text(json.dumps(config, indent=2))
+            config_path.chmod(0o600)
             logger.info(f"Saved JWT token to {self.config_file}")
         except Exception as e:
             logger.error(f"Error saving token: {e}")

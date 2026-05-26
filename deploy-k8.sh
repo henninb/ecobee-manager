@@ -9,7 +9,7 @@ set -euo pipefail
 #   - SSH access to the worker node (debian-k8s-worker-01)
 #   - Docker or Podman available for building the image
 #   - gopass with ecobee/email and ecobee/password entries
-#   - config/schedule.json present
+#   - config/schedule_winter.json or config/schedule_summer.json present
 #
 # Storage strategy: hostPath volumes on debian-k8s-worker-01
 #   /opt/ecobee-manager/ecobee_jwt.json  — JWT token (persists across restarts)
@@ -25,7 +25,8 @@ IMAGE_TAG=$(git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)
 IMAGE="${APP_NAME}:${IMAGE_TAG}"
 WORKER_NODE="debian-k8s-worker-01"
 HOST_DATA_DIR="/opt/ecobee-manager"
-SCHEDULE_FILE="./config/schedule.json"
+SCHEDULE_WINTER_FILE="./config/schedule_winter.json"
+SCHEDULE_SUMMER_FILE="./config/schedule_summer.json"
 
 # --- helpers -----------------------------------------------------------------
 
@@ -40,7 +41,15 @@ require_cmd kubectl
 require_cmd gopass
 command -v docker &>/dev/null || command -v podman &>/dev/null || die "docker or podman is required"
 
-[[ -f "$SCHEDULE_FILE" ]] || die "Missing $SCHEDULE_FILE"
+[[ -f "$SCHEDULE_WINTER_FILE" ]] || die "Missing $SCHEDULE_WINTER_FILE"
+[[ -f "$SCHEDULE_SUMMER_FILE" ]] || die "Missing $SCHEDULE_SUMMER_FILE"
+
+# --- read secrets ------------------------------------------------------------
+# Read before the slow build/import so GPG cache is still warm.
+
+info "Reading credentials from gopass"
+ECOBEE_EMAIL=$(gopass show ecobee/email)
+ECOBEE_PASSWORD=$(gopass show ecobee/password)
 
 # --- build image -------------------------------------------------------------
 
@@ -61,13 +70,8 @@ else
     podman save "$IMAGE" | ssh "$WORKER_NODE"    "sudo ctr -n k8s.io images import -"
 fi
 
-# --- read secrets ------------------------------------------------------------
-
-info "Reading credentials from gopass"
-ECOBEE_EMAIL=$(gopass show ecobee/email)
-ECOBEE_PASSWORD=$(gopass show ecobee/password)
-
-SCHEDULE_JSON=$(cat "$SCHEDULE_FILE")
+SCHEDULE_WINTER_JSON=$(cat "$SCHEDULE_WINTER_FILE")
+SCHEDULE_SUMMER_JSON=$(cat "$SCHEDULE_SUMMER_FILE")
 
 # --- storage class (needed only if PVCs are used elsewhere) ------------------
 
@@ -117,8 +121,10 @@ metadata:
   name: ${APP_NAME}-schedule
   namespace: $NAMESPACE
 data:
-  schedule.json: |
-$(echo "$SCHEDULE_JSON" | sed 's/^/    /')
+  schedule_winter.json: |
+$(echo "$SCHEDULE_WINTER_JSON" | sed 's/^/    /')
+  schedule_summer.json: |
+$(echo "$SCHEDULE_SUMMER_JSON" | sed 's/^/    /')
 
 ---
 apiVersion: apps/v1

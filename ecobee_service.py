@@ -142,9 +142,25 @@ class EcobeeServiceJWT:
         self.logger.info("JWT authentication initialized")
         return True
 
+    @staticmethod
+    def _select_schedule_file() -> str:
+        """Return the schedule file for the current season.
+
+        Summer (cooling): May 1 – Sep 30
+        Winter (heating): Oct 1 – Apr 30
+        """
+        month = datetime.now().month
+        return (
+            "config/schedule_summer.json"
+            if 5 <= month <= 9
+            else "config/schedule_winter.json"
+        )
+
     def _init_schedule(self) -> bool:
         self.logger.info("Loading schedule...")
-        self.schedule = ScheduleEngine("config/schedule.json")
+        schedule_file = self._select_schedule_file()
+        self.logger.info(f"Selected schedule file: {schedule_file}")
+        self.schedule = ScheduleEngine(schedule_file)
         if not self.schedule.load_schedule():
             self.logger.error("Failed to load schedule")
             return False
@@ -227,7 +243,16 @@ class EcobeeServiceJWT:
     def _check_and_update_temperature(self) -> None:
         """Single iteration of temperature enforcement logic."""
         try:
-            if self.schedule.check_for_updates():
+            current_file = self._select_schedule_file()
+            if current_file != self.schedule.schedule_file:
+                self.logger.info(
+                    f"Season changed — switching schedule from "
+                    f"{self.schedule.schedule_file} to {current_file}"
+                )
+                self.schedule = ScheduleEngine(current_file)
+                self.schedule.load_schedule()
+                self._apply_ecobee_program()
+            elif self.schedule.check_for_updates():
                 self._apply_ecobee_program()
 
             expected_temp = self.schedule.get_expected_temperature()
@@ -239,9 +264,9 @@ class EcobeeServiceJWT:
                 self.consecutive_errors = 0
                 return
 
-            self.logger.info(f"Expected temperature: {expected_temp}°F")
+            self.logger.info(f"Expected {self.schedule.mode} temperature: {expected_temp}°F")
 
-            current_temp = self.controller.get_current_temperature_setting()
+            current_temp = self.controller.get_current_temperature_setting(mode=self.schedule.mode)
             if current_temp is None:
                 self.logger.error("Failed to read current temperature setting")
                 self.health_server.increment_errors()
