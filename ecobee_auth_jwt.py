@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import stat
+import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -43,6 +44,16 @@ _SLEEP_FOR_PORTAL = 8    # seconds — wait for portal to fire its API calls
 _jwks_client: PyJWKClient | None = None
 
 
+def _env_int(name: str, default: int) -> int:
+    """Return the integer value of env var *name*, falling back to *default* on error."""
+    raw = os.getenv(name, str(default))
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("Invalid %s=%r, using default %d", name, raw, default)
+        return default
+
+
 def _get_jwks_client() -> PyJWKClient:
     global _jwks_client
     if _jwks_client is None:
@@ -65,10 +76,10 @@ class EcobeeAuthJWT:
         self.last_refreshed = None
         self.driver = None
         self.api_base_url = None
+        self._user_data_dir: str | None = None
 
-        # Configurable timeout for Selenium operations (useful for slower networks)
-        self.selenium_timeout = int(os.getenv('SELENIUM_TIMEOUT', '30'))  # Default 30s
-        self.selenium_redirect_timeout = int(os.getenv('SELENIUM_REDIRECT_TIMEOUT', '60'))  # Default 60s for redirects
+        self.selenium_timeout = _env_int('SELENIUM_TIMEOUT', 30)
+        self.selenium_redirect_timeout = _env_int('SELENIUM_REDIRECT_TIMEOUT', 60)
 
     def _parse_jwt_timestamps(self, token: str):
         """
@@ -131,10 +142,9 @@ class EcobeeAuthJWT:
         if self.driver:
             return
 
-        # Always start with a clean profile so cached cookies don't skip the login page
-        user_data_dir = '/tmp/chromium-user-data'
-        if os.path.exists(user_data_dir):
-            shutil.rmtree(user_data_dir, ignore_errors=True)
+        # Always start with a clean profile so cached cookies don't skip the login page.
+        # mkdtemp creates a private directory (mode 0700) that no other process can read.
+        self._user_data_dir = tempfile.mkdtemp(prefix='ecobee-chrome-')
 
         chrome_options = Options()
         if headless:
@@ -148,7 +158,7 @@ class EcobeeAuthJWT:
         chrome_options.add_argument('--no-first-run')
         chrome_options.add_argument('--no-default-browser-check')
         chrome_options.add_argument('--disable-default-apps')
-        chrome_options.add_argument(f'--user-data-dir={user_data_dir}')
+        chrome_options.add_argument(f'--user-data-dir={self._user_data_dir}')
         chrome_options.add_argument('--disable-blink-features=AutomationControlled')
         chrome_options.add_argument('user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
 
@@ -191,7 +201,7 @@ class EcobeeAuthJWT:
             raise
 
     def _close_driver(self):
-        """Close Chrome driver"""
+        """Close Chrome driver and remove its private temp directory."""
         if self.driver:
             try:
                 self.driver.quit()
@@ -199,6 +209,9 @@ class EcobeeAuthJWT:
                 logger.info("Chrome driver closed")
             except Exception as e:
                 logger.warning(f"Error closing driver: {e}")
+        if self._user_data_dir:
+            shutil.rmtree(self._user_data_dir, ignore_errors=True)
+            self._user_data_dir = None
 
     def _fill_input_field(self, element, value: str) -> None:
         """Fill a form field via JavaScript events (compatible with React/Vue frameworks)."""
@@ -416,8 +429,11 @@ class EcobeeAuthJWT:
         try:
             config_path = Path(self.config_file)
             config_path.parent.mkdir(parents=True, exist_ok=True)
-            config_path.write_text(json.dumps(config, indent=2))
-            config_path.chmod(0o600)
+            # Open with O_CREAT so permissions are set before any data is written,
+            # eliminating the TOCTOU window that exists with write_text + chmod.
+            fd = os.open(str(config_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, 'w') as f:
+                f.write(json.dumps(config, indent=2))
             logger.info(f"Saved JWT token to {self.config_file}")
         except Exception as e:
             logger.error(f"Error saving token: {e}")

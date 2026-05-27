@@ -7,6 +7,8 @@ from temperature_controller import (
     EcobeeAPIError,
     _to_ecobee,
     _from_ecobee,
+    _HEAT_FLOOR,
+    _COOL_CEILING,
 )
 
 
@@ -75,19 +77,19 @@ class TestGet:
     def test_success(self, ctrl):
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"thermostatList": []}
-        with patch("requests.get", return_value=mock_resp):
+        with patch.object(ctrl._session, "get", return_value=mock_resp):
             result = ctrl._get({"format": "json"})
         assert result == {"thermostatList": []}
 
     def test_connection_error(self, ctrl):
-        with patch("requests.get", side_effect=requests.exceptions.ConnectionError()):
+        with patch.object(ctrl._session, "get", side_effect=requests.exceptions.ConnectionError()):
             result = ctrl._get({})
         assert result is None
 
     def test_http_error(self, ctrl):
         mock_resp = MagicMock()
         mock_resp.raise_for_status.side_effect = requests.exceptions.HTTPError()
-        with patch("requests.get", return_value=mock_resp):
+        with patch.object(ctrl._session, "get", return_value=mock_resp):
             result = ctrl._get({})
         assert result is None
 
@@ -96,7 +98,7 @@ class TestPost:
     def test_success(self, ctrl):
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"status": {"code": 0}}
-        with patch("requests.post", return_value=mock_resp):
+        with patch.object(ctrl._session, "post", return_value=mock_resp):
             result = ctrl._post({"key": "val"})
         assert result == {"status": {"code": 0}}
 
@@ -104,13 +106,13 @@ class TestPost:
         exc = requests.exceptions.HTTPError("error")
         exc.response = MagicMock()
         exc.response.text = "server error text"
-        with patch("requests.post", side_effect=exc):
+        with patch.object(ctrl._session, "post", side_effect=exc):
             result = ctrl._post({})
         assert result is None
 
     def test_error_without_response(self, ctrl):
         exc = requests.exceptions.ConnectionError("refused")
-        with patch("requests.post", side_effect=exc):
+        with patch.object(ctrl._session, "post", side_effect=exc):
             result = ctrl._post({})
         assert result is None
 
@@ -271,6 +273,9 @@ class TestGetCurrentTemperatureSetting:
         with patch.object(ctrl, "_get_thermostat", return_value=None):
             assert ctrl.get_current_temperature_setting() is None
 
+    def test_invalid_mode_returns_none(self, ctrl):
+        assert ctrl.get_current_temperature_setting(mode="auto") is None
+
 
 class TestTemperaturesMatch:
     def test_exact(self, ctrl):
@@ -334,12 +339,52 @@ class TestSetCoolTemperature:
             with patch.object(ctrl, "_set_hold", return_value=True) as m:
                 result = ctrl.set_cool_temperature(74)
         assert result is True
-        # heat should be _HEAT_FLOOR=600, cool should be 740
-        m.assert_called_once_with("t1", 600, 740, 60)
+        m.assert_called_once_with("t1", _HEAT_FLOOR, 740, 60)
 
     def test_no_thermostat(self, ctrl):
         with patch.object(ctrl, "_get_thermostat", return_value=None):
             assert ctrl.set_cool_temperature(74) is False
+
+
+class TestSetHeatTemperature:
+    def test_success_uses_cool_ceiling(self, ctrl):
+        with patch.object(ctrl, "_get_thermostat", return_value={"identifier": "t1"}):
+            with patch.object(ctrl, "_set_hold", return_value=True) as m:
+                result = ctrl.set_heat_temperature(67)
+        assert result is True
+        m.assert_called_once_with("t1", 670, _COOL_CEILING, 60)
+
+    def test_no_thermostat(self, ctrl):
+        with patch.object(ctrl, "_get_thermostat", return_value=None):
+            assert ctrl.set_heat_temperature(67) is False
+
+    def test_hold_fails(self, ctrl):
+        with patch.object(ctrl, "_get_thermostat", return_value={"identifier": "t1"}):
+            with patch.object(ctrl, "_set_hold", return_value=False):
+                assert ctrl.set_heat_temperature(67) is False
+
+
+class TestSetTemperatureForMode:
+    def test_cooling_mode_delegates_to_set_cool_temperature(self, ctrl):
+        with patch.object(ctrl, "set_cool_temperature", return_value=True) as m:
+            result = ctrl.set_temperature_for_mode(74, "cooling")
+        assert result is True
+        m.assert_called_once_with(74, None, 60)
+
+    def test_heating_mode_delegates_to_set_heat_temperature(self, ctrl):
+        with patch.object(ctrl, "set_heat_temperature", return_value=True) as m:
+            result = ctrl.set_temperature_for_mode(67, "heating")
+        assert result is True
+        m.assert_called_once_with(67, None, 60)
+
+    def test_unknown_mode_returns_false(self, ctrl):
+        result = ctrl.set_temperature_for_mode(68, "auto")
+        assert result is False
+
+    def test_passes_thermostat_id_and_duration(self, ctrl):
+        with patch.object(ctrl, "set_cool_temperature", return_value=True) as m:
+            ctrl.set_temperature_for_mode(74, "cooling", thermostat_id="t1", duration_minutes=120)
+        m.assert_called_once_with(74, "t1", 120)
 
 
 # ---------------------------------------------------------------------------

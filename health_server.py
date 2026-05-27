@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import functools
+import hmac
 import logging
 import os
 import threading
@@ -20,7 +21,8 @@ def _require_api_key(api_key: str | None):
         @functools.wraps(f)
         def wrapper(*args, **kwargs):
             if api_key:
-                if request.headers.get("X-API-Key") != api_key:
+                provided = request.headers.get("X-API-Key") or ""
+                if not hmac.compare_digest(provided.encode(), api_key.encode()):
                     abort(403)
             return f(*args, **kwargs)
         return wrapper
@@ -65,6 +67,15 @@ class HealthServer:
 
     def _setup_routes(self) -> None:
         protected = _require_api_key(self._api_key)
+
+        @self.app.after_request
+        def _security_headers(response):
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["X-Frame-Options"] = "DENY"
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Referrer-Policy"] = "no-referrer"
+            response.headers["Content-Security-Policy"] = "default-src 'none'"
+            return response
 
         @self.app.route("/health", methods=["GET"])
         def health():
@@ -194,24 +205,23 @@ class HealthServer:
         with self._lock:
             self.state["schedule_loaded"] = loaded
 
-    def increment_checks(self) -> None:
+    def _increment(self, key: str, timestamp_key: str | None = None) -> None:
         with self._lock:
-            self.stats["checks_performed"] += 1
-            self.stats["last_check"] = datetime.now(timezone.utc)
+            self.stats[key] += 1
+            if timestamp_key:
+                self.stats[timestamp_key] = datetime.now(timezone.utc)
+
+    def increment_checks(self) -> None:
+        self._increment("checks_performed", "last_check")
 
     def increment_reverts(self) -> None:
-        with self._lock:
-            self.stats["reverts_performed"] += 1
-            self.stats["last_revert"] = datetime.now(timezone.utc)
+        self._increment("reverts_performed", "last_revert")
 
     def increment_token_refreshes(self) -> None:
-        with self._lock:
-            self.stats["token_refreshes"] += 1
+        self._increment("token_refreshes")
 
     def increment_errors(self) -> None:
-        with self._lock:
-            self.stats["errors"] += 1
-            self.stats["last_error"] = datetime.now(timezone.utc)
+        self._increment("errors", "last_error")
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -219,14 +229,16 @@ class HealthServer:
 
     def start(self) -> None:
         """Start the health server in a background daemon thread via waitress."""
+        host = os.environ.get("HEALTH_HOST", "127.0.0.1")
+
         def _run() -> None:
             from waitress import serve
-            logger.info(f"Health server listening on 0.0.0.0:{self.port}")
-            serve(self.app, host="0.0.0.0", port=self.port, threads=4)
+            logger.info("Health server listening on %s:%s", host, self.port)
+            serve(self.app, host=host, port=self.port, threads=4)
 
         self._server_thread = threading.Thread(target=_run, daemon=True, name="health-server")
         self._server_thread.start()
-        logger.info(f"Health server started on http://0.0.0.0:{self.port}")
+        logger.info("Health server started on http://%s:%s", host, self.port)
 
     def is_running(self) -> bool:
         """Return True when the server thread is alive."""

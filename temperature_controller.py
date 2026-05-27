@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import Any
@@ -14,7 +15,11 @@ logger = logging.getLogger(__name__)
 _DEFAULT_BASE_URL = "https://api.ecobee.com/1"
 _TEMP_FACTOR = 10       # Ecobee stores setpoints as °F × 10
 _HEAT_FLOOR = 600       # 60 °F in Ecobee units — low enough to never trigger heating
+_COOL_CEILING = 950     # 95 °F in Ecobee units — high enough to never trigger cooling
 _DEFAULT_HTTP_TIMEOUT = int(os.getenv("ECOBEE_HTTP_TIMEOUT", "10"))
+_MIN_TEMP_F = 45        # lowest setpoint we will ever send to the API
+_MAX_TEMP_F = 90        # highest setpoint we will ever send to the API
+_VALID_MODES = frozenset({"cooling", "heating"})
 
 
 def _to_ecobee(temp_f: int | float) -> int:
@@ -25,6 +30,17 @@ def _to_ecobee(temp_f: int | float) -> int:
 def _from_ecobee(ecobee_temp: int | float) -> float:
     """Convert Ecobee integer units to Fahrenheit."""
     return ecobee_temp / _TEMP_FACTOR
+
+
+def _validate_temp(temp_f: int | float) -> bool:
+    """Return False and log an error when temp_f is outside the safe operating range."""
+    if not (_MIN_TEMP_F <= temp_f <= _MAX_TEMP_F):
+        logger.error(
+            "Temperature %s°F is outside the safe range [%s, %s]",
+            temp_f, _MIN_TEMP_F, _MAX_TEMP_F,
+        )
+        return False
+    return True
 
 
 class EcobeeAPIError(Exception):
@@ -45,10 +61,33 @@ class TemperatureController:
         self.access_token = access_token
         self.base_url = base_url or _DEFAULT_BASE_URL
         self.timeout = timeout if timeout is not None else _DEFAULT_HTTP_TIMEOUT
+        self._session = requests.Session()
+        self._session.headers.update({
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        })
 
     def update_token(self, access_token: str) -> None:
         """Replace the bearer token used for subsequent API calls."""
         self.access_token = access_token
+        self._session.headers["Authorization"] = f"Bearer {access_token}"
+
+    @property
+    def _headers(self) -> dict[str, str]:
+        """Return current session headers (kept for test compatibility)."""
+        return dict(self._session.headers)
+
+    @staticmethod
+    def _pick_thermostat(thermostats: list[dict] | None, thermostat_id: str | None) -> dict | None:
+        """Return the thermostat matching *thermostat_id*, or the first one when None."""
+        if not thermostats:
+            return None
+        if thermostat_id is None:
+            return thermostats[0]
+        match = next((t for t in thermostats if t["identifier"] == thermostat_id), None)
+        if match is None:
+            logger.error("Thermostat %s not found", thermostat_id)
+        return match
 
     # ------------------------------------------------------------------
     # Internal HTTP helpers
@@ -65,7 +104,7 @@ class TemperatureController:
         """GET /thermostat; return parsed JSON or None on transport error."""
         url = f"{self.base_url}/thermostat"
         try:
-            response = requests.get(url, params=params, headers=self._headers, timeout=self.timeout)
+            response = self._session.get(url, params=params, timeout=self.timeout)
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
@@ -76,7 +115,7 @@ class TemperatureController:
         """POST /thermostat; return parsed JSON or None on transport error."""
         url = f"{self.base_url}/thermostat"
         try:
-            response = requests.post(url, json=body, headers=self._headers, timeout=self.timeout)
+            response = self._session.post(url, json=body, timeout=self.timeout)
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
@@ -108,10 +147,14 @@ class TemperatureController:
         """Return all registered thermostats, or None on error."""
         data = self._get({
             "format": "json",
-            "body": (
-                '{"selection":{"selectionType":"registered","selectionMatch":"",'
-                '"includeRuntime":true,"includeSettings":true}}'
-            ),
+            "body": json.dumps({
+                "selection": {
+                    "selectionType": "registered",
+                    "selectionMatch": "",
+                    "includeRuntime": True,
+                    "includeSettings": True,
+                }
+            }),
         })
         if data is None:
             return None
@@ -121,17 +164,7 @@ class TemperatureController:
 
     def _get_thermostat(self, thermostat_id: str | None = None) -> dict | None:
         """Return the thermostat matching *thermostat_id*, or the first one found."""
-        thermostats = self.get_thermostats()
-        if not thermostats:
-            return None
-        if thermostat_id is None:
-            return thermostats[0]
-        match = next(
-            (t for t in thermostats if t["identifier"] == thermostat_id), None
-        )
-        if match is None:
-            logger.error(f"Thermostat {thermostat_id} not found")
-        return match
+        return self._pick_thermostat(self.get_thermostats(), thermostat_id)
 
     def _fetch_thermostat_data(
         self, body: str, thermostat_id: str | None = None
@@ -140,17 +173,7 @@ class TemperatureController:
         data = self._get({"format": "json", "body": body})
         if data is None:
             return None
-        thermostats = data.get("thermostatList", [])
-        if not thermostats:
-            return None
-        if thermostat_id is None:
-            return thermostats[0]
-        match = next(
-            (t for t in thermostats if t["identifier"] == thermostat_id), None
-        )
-        if match is None:
-            logger.error(f"Thermostat {thermostat_id} not found")
-        return match
+        return self._pick_thermostat(data.get("thermostatList", []), thermostat_id)
 
     # ------------------------------------------------------------------
     # Temperature reading
@@ -163,6 +186,9 @@ class TemperatureController:
 
         Pass mode='cooling' to read the cool setpoint, 'heating' for heat.
         """
+        if mode not in _VALID_MODES:
+            logger.error("Invalid mode %r; expected one of %s", mode, sorted(_VALID_MODES))
+            return None
         thermostat = self._get_thermostat(thermostat_id)
         if thermostat is None:
             return None
@@ -239,6 +265,8 @@ class TemperatureController:
         duration_minutes: int = 60,
     ) -> bool:
         """Set a heat-and-cool hold to *target_temp* °F."""
+        if not _validate_temp(target_temp):
+            return False
         thermostat = self._get_thermostat(thermostat_id)
         if thermostat is None:
             return False
@@ -255,6 +283,8 @@ class TemperatureController:
         duration_minutes: int = 60,
     ) -> bool:
         """Set a cooling hold to *target_temp* °F with a 60 °F heat floor."""
+        if not _validate_temp(target_temp):
+            return False
         thermostat = self._get_thermostat(thermostat_id)
         if thermostat is None:
             return False
@@ -268,6 +298,47 @@ class TemperatureController:
             logger.info(f"Set cool temperature to {target_temp}°F")
         return ok
 
+    def set_heat_temperature(
+        self,
+        target_temp: int,
+        thermostat_id: str | None = None,
+        duration_minutes: int = 60,
+    ) -> bool:
+        """Set a heating hold to *target_temp* °F with a 95 °F cool ceiling."""
+        if not _validate_temp(target_temp):
+            return False
+        thermostat = self._get_thermostat(thermostat_id)
+        if thermostat is None:
+            return False
+        ok = self._set_hold(
+            thermostat["identifier"],
+            _to_ecobee(target_temp),
+            _COOL_CEILING,
+            duration_minutes,
+        )
+        if ok:
+            logger.info(f"Set heat temperature to {target_temp}°F")
+        return ok
+
+    def set_temperature_for_mode(
+        self,
+        target_temp: int,
+        mode: str,
+        thermostat_id: str | None = None,
+        duration_minutes: int = 60,
+    ) -> bool:
+        """Set a hold for *target_temp* °F dispatching to the correct mode.
+
+        mode='cooling' → set_cool_temperature (heat floor at 60 °F)
+        mode='heating' → set_heat_temperature (cool ceiling at 95 °F)
+        """
+        if mode not in _VALID_MODES:
+            logger.error("Invalid mode %r; expected one of %s", mode, sorted(_VALID_MODES))
+            return False
+        if mode == "cooling":
+            return self.set_cool_temperature(target_temp, thermostat_id, duration_minutes)
+        return self.set_heat_temperature(target_temp, thermostat_id, duration_minutes)
+
     # ------------------------------------------------------------------
     # Sensor helpers
     # ------------------------------------------------------------------
@@ -275,8 +346,13 @@ class TemperatureController:
     def get_sensors(self, thermostat_id: str | None = None) -> list[dict] | None:
         """Return remote sensors with temperature and occupancy data."""
         thermostat = self._fetch_thermostat_data(
-            '{"selection":{"selectionType":"registered","selectionMatch":"",'
-            '"includeSensors":true}}',
+            json.dumps({
+                "selection": {
+                    "selectionType": "registered",
+                    "selectionMatch": "",
+                    "includeSensors": True,
+                }
+            }),
             thermostat_id,
         )
         if thermostat is None:
@@ -305,8 +381,15 @@ class TemperatureController:
     ) -> dict | None:
         """Return program, climate, and sensor data for a thermostat."""
         thermostat = self._fetch_thermostat_data(
-            '{"selection":{"selectionType":"registered","selectionMatch":"",'
-            '"includeProgram":true,"includeSensors":true,"includeEvents":true}}',
+            json.dumps({
+                "selection": {
+                    "selectionType": "registered",
+                    "selectionMatch": "",
+                    "includeProgram": True,
+                    "includeSensors": True,
+                    "includeEvents": True,
+                }
+            }),
             thermostat_id,
         )
         if thermostat is None:

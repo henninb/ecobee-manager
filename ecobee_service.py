@@ -13,7 +13,7 @@ import signal
 import sys
 import threading
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 
 from ecobee_auth_jwt import EcobeeAuthJWT
@@ -27,9 +27,9 @@ class EcobeeServiceJWT:
     """Daemon that enforces thermostat setpoints from a local schedule."""
 
     def __init__(self) -> None:
-        self.check_interval_minutes = int(os.environ.get("CHECK_INTERVAL_MINUTES", 40))
+        self.check_interval_minutes = max(1, int(os.environ.get("CHECK_INTERVAL_MINUTES", 40)))
         self.log_level = os.environ.get("LOG_LEVEL", "INFO")
-        self.error_threshold = 3
+        self.error_threshold = int(os.environ.get("ERROR_THRESHOLD", 3))
 
         self.running = False
         self._stop_event = threading.Event()
@@ -54,7 +54,9 @@ class EcobeeServiceJWT:
         os.makedirs(log_dir, exist_ok=True)
         log_file = os.path.join(log_dir, "ecobee_service.log")
 
-        level = getattr(logging, self.log_level)
+        level = getattr(logging, self.log_level.upper(), logging.INFO)
+        if not isinstance(level, int):
+            level = logging.INFO
         formatter = logging.Formatter(
             "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
@@ -269,8 +271,7 @@ class EcobeeServiceJWT:
             current_temp = self.controller.get_current_temperature_setting(mode=self.schedule.mode)
             if current_temp is None:
                 self.logger.error("Failed to read current temperature setting")
-                self.health_server.increment_errors()
-                self.consecutive_errors += 1
+                self._record_error()
                 return
 
             self.logger.info(f"Current temperature: {current_temp}°F")
@@ -281,15 +282,14 @@ class EcobeeServiceJWT:
                 self.logger.warning(
                     f"Mismatch: expected {expected_temp}°F, found {current_temp}°F"
                 )
-                if self.controller.set_temperature(expected_temp):
+                if self.controller.set_temperature_for_mode(expected_temp, self.schedule.mode):
                     self.logger.info(f"Reverted temperature to {expected_temp}°F")
                     self.health_server.increment_reverts()
-                    self.recent_reverts.append(datetime.now())
+                    self.recent_reverts.append(datetime.now(timezone.utc))
                     self._check_excessive_changes()
                 else:
                     self.logger.error(f"Failed to set temperature to {expected_temp}°F")
-                    self.health_server.increment_errors()
-                    self.consecutive_errors += 1
+                    self._record_error()
                     return
             else:
                 self.logger.info("Temperature matches schedule ✓")
@@ -298,11 +298,15 @@ class EcobeeServiceJWT:
 
         except Exception as e:
             self.logger.error(f"Error in temperature check: {e}", exc_info=True)
-            self.health_server.increment_errors()
-            self.consecutive_errors += 1
+            self._record_error()
+
+    def _record_error(self) -> None:
+        """Increment the error counter and health-server stats atomically."""
+        self.health_server.increment_errors()
+        self.consecutive_errors += 1
 
     def _check_excessive_changes(self) -> None:
-        one_hour_ago = datetime.now() - timedelta(hours=1)
+        one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
         recent_count = sum(
             1 for t in self.recent_reverts if t > one_hour_ago
         )
