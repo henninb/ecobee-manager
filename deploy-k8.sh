@@ -177,6 +177,8 @@ spec:
               value: "30"
             - name: SELENIUM_REDIRECT_TIMEOUT
               value: "60"
+            - name: HEALTH_HOST
+              value: "0.0.0.0"
           ports:
             - containerPort: 8080
               name: health
