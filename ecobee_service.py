@@ -196,45 +196,69 @@ class EcobeeServiceJWT:
     # ------------------------------------------------------------------
 
     def _apply_ecobee_program(self) -> None:
-        """Push the night window to the Ecobee program and clear daytime slots."""
+        """Push the schedule windows to the Ecobee program."""
         windows = self.schedule.get_windows()
-        night = next((w for w in windows if w.enabled), None)
-        if not night:
+        mode = self.schedule.mode
+
+        if mode == "cooling":
+            day = next((w for w in windows if w.name == "day" and w.enabled), None)
+            night = next((w for w in windows if w.name == "night" and w.enabled), None)
+            if not day or not night:
+                self.logger.info(
+                    "Missing day or night window — skipping Ecobee program update"
+                )
+                return
             self.logger.info(
-                "No enabled windows configured — skipping Ecobee program update"
+                f"Setting summer schedule: day={day.temperature}°F "
+                f"({day.start.hour:02d}:00–{day.end.hour:02d}:00), "
+                f"night={night.temperature}°F"
             )
-            return
+            if not self.controller.update_day_schedule(
+                day_temp=day.temperature,
+                night_temp=night.temperature,
+                day_start_hour=day.start.hour,
+                day_end_hour=day.end.hour,
+            ):
+                self.logger.warning("Failed to set summer schedule")
+                return
+        else:
+            night = next((w for w in windows if w.enabled), None)
+            if not night:
+                self.logger.info(
+                    "No enabled windows configured — skipping Ecobee program update"
+                )
+                return
 
-        start_hour = night.start.hour
-        end_hour = night.end.hour
-        temp = night.temperature
+            start_hour = night.start.hour
+            end_hour = night.end.hour
+            temp = night.temperature
 
-        self.logger.info(
-            f"Setting night slots ({start_hour:02d}:00–{end_hour:02d}:00) "
-            f"to sleep/smart1 @ {temp}°F..."
-        )
-        if not self.controller.update_night_schedule(
-            temp=temp,
-            climate_ref="sleep",
-            alt_climate_ref="smart1",
-            start_hour=start_hour,
-            end_hour=end_hour,
-        ):
-            self.logger.warning("Failed to set night slots")
-            return
+            self.logger.info(
+                f"Setting night slots ({start_hour:02d}:00–{end_hour:02d}:00) "
+                f"to sleep/smart1 @ {temp}°F..."
+            )
+            if not self.controller.update_night_schedule(
+                temp=temp,
+                climate_ref="sleep",
+                alt_climate_ref="smart1",
+                start_hour=start_hour,
+                end_hour=end_hour,
+            ):
+                self.logger.warning("Failed to set night slots")
+                return
 
-        self.logger.info(
-            f"Clearing daytime slots ({end_hour:02d}:00–{start_hour:02d}:00) to 'home'..."
-        )
-        if not self.controller.update_night_schedule(
-            temp=0,
-            climate_ref="home",
-            start_hour=end_hour,
-            end_hour=start_hour,
-            update_heat_temp=False,
-        ):
-            self.logger.warning("Failed to clear daytime slots")
-            return
+            self.logger.info(
+                f"Clearing daytime slots ({end_hour:02d}:00–{start_hour:02d}:00) to 'home'..."
+            )
+            if not self.controller.update_night_schedule(
+                temp=0,
+                climate_ref="home",
+                start_hour=end_hour,
+                end_hour=start_hour,
+                update_heat_temp=False,
+            ):
+                self.logger.warning("Failed to clear daytime slots")
+                return
 
         self.logger.info("Ecobee program updated successfully")
 
