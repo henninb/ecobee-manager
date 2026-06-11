@@ -53,6 +53,7 @@ class ScheduleEngine:
         self.mode: str = "heating"
         self.windows: list[TimeWindow] = []
         self.default_temperature: int | None = None
+        self.peak_cool_max: int | None = None
         self.last_modified = None
 
     def load_schedule(self) -> bool:
@@ -78,6 +79,10 @@ class ScheduleEngine:
             # Load default temperature
             default = data.get('default_temperature')
             self.default_temperature = int(default) if default is not None else None
+
+            # Load peak cool max (utility demand-response ceiling, cooling season only)
+            peak_cool_max = data.get('peak_cool_max')
+            self.peak_cool_max = int(peak_cool_max) if peak_cool_max is not None else None
 
             # Load windows
             self.windows = []

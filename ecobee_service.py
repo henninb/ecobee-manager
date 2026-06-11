@@ -41,6 +41,7 @@ class EcobeeServiceJWT:
 
         self.consecutive_errors = 0
         self.recent_reverts: deque[datetime] = deque(maxlen=60)
+        self._demand_response_active = False
 
         self._setup_logging()
         self._setup_signal_handlers()
@@ -268,6 +269,7 @@ class EcobeeServiceJWT:
 
     def _check_and_update_temperature(self) -> None:
         """Single iteration of temperature enforcement logic."""
+        self._demand_response_active = False
         try:
             current_file = self._select_schedule_file()
             if current_file != self.schedule.schedule_file:
@@ -301,6 +303,26 @@ class EcobeeServiceJWT:
             self.logger.info(f"Current temperature: {current_temp}°F")
             self.health_server.update_temperature_status(current_temp, expected_temp)
             self.health_server.increment_checks()
+
+            # Respect utility demand-response events (cooling season only).
+            # If the utility has raised the setpoint, allow up to peak_cool_max (78 °F).
+            # Anything above that ceiling is still brought back down to peak_cool_max.
+            if self.schedule.mode == "cooling" and self.schedule.peak_cool_max is not None:
+                if self.controller.has_active_demand_response():
+                    self._demand_response_active = True
+                    if current_temp <= self.schedule.peak_cool_max:
+                        self.logger.info(
+                            f"Demand response active — {current_temp}°F is within "
+                            f"peak ceiling {self.schedule.peak_cool_max}°F, leaving as-is"
+                        )
+                        self.consecutive_errors = 0
+                        return
+                    self.logger.info(
+                        f"Demand response active but {current_temp}°F exceeds "
+                        f"peak ceiling {self.schedule.peak_cool_max}°F — "
+                        f"capping to {self.schedule.peak_cool_max}°F"
+                    )
+                    expected_temp = self.schedule.peak_cool_max
 
             if not self.controller.temperatures_match(current_temp, expected_temp):
                 self.logger.warning(
@@ -372,8 +394,6 @@ class EcobeeServiceJWT:
         self.logger.info(f"Check interval: {self.check_interval_minutes} minutes")
         self.logger.info("=" * 60)
 
-        interval_seconds = self.check_interval_minutes * 60
-
         while self.running:
             try:
                 if not self._refresh_token_if_needed():
@@ -391,10 +411,13 @@ class EcobeeServiceJWT:
                     self.consecutive_errors = 0
 
                 if self.running:
-                    self.logger.info(
-                        f"Sleeping for {self.check_interval_minutes} minutes..."
-                    )
-                    self._stop_event.wait(interval_seconds)
+                    if self._demand_response_active:
+                        sleep_minutes = 15
+                        self.logger.info("Demand response active — sleeping 15 minutes...")
+                    else:
+                        sleep_minutes = self.check_interval_minutes
+                        self.logger.info(f"Sleeping for {sleep_minutes} minutes...")
+                    self._stop_event.wait(sleep_minutes * 60)
                     self._stop_event.clear()
 
             except KeyboardInterrupt:

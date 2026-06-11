@@ -153,6 +153,26 @@ class TestLoadSchedule:
         finally:
             os.unlink(path)
 
+    def test_peak_cool_max_loaded(self):
+        data = {"timezone": "UTC", "mode": "cooling", "peak_cool_max": 78, "windows": []}
+        path = _write_schedule(data)
+        try:
+            engine = ScheduleEngine(path)
+            engine.load_schedule()
+            assert engine.peak_cool_max == 78
+        finally:
+            os.unlink(path)
+
+    def test_peak_cool_max_absent(self):
+        data = {"timezone": "UTC", "windows": []}
+        path = _write_schedule(data)
+        try:
+            engine = ScheduleEngine(path)
+            engine.load_schedule()
+            assert engine.peak_cool_max is None
+        finally:
+            os.unlink(path)
+
     def test_load_schedule_generic_exception(self):
         engine = ScheduleEngine("/fake/path.json")
         with patch("schedule_engine.Path.exists", return_value=True):

@@ -2,6 +2,7 @@
   "timezone": "America/Chicago",
   "mode": "cooling",
   "default_temperature": 74,
+  "peak_cool_max": 78,
   "windows": [
     {
       "name": "day",

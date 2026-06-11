@@ -289,6 +289,32 @@ class TestTemperaturesMatch:
         assert ctrl.temperatures_match(68, 70) is False
 
 
+class TestHasActiveDemandResponse:
+    def test_returns_true_when_dr_running(self, ctrl):
+        thermostat = {"events": [{"type": "demandResponse", "running": True}]}
+        with patch.object(ctrl, "_get_thermostat", return_value=thermostat):
+            assert ctrl.has_active_demand_response() is True
+
+    def test_returns_false_when_dr_not_running(self, ctrl):
+        thermostat = {"events": [{"type": "demandResponse", "running": False}]}
+        with patch.object(ctrl, "_get_thermostat", return_value=thermostat):
+            assert ctrl.has_active_demand_response() is False
+
+    def test_returns_false_for_hold_event(self, ctrl):
+        thermostat = {"events": [{"type": "hold", "running": True}]}
+        with patch.object(ctrl, "_get_thermostat", return_value=thermostat):
+            assert ctrl.has_active_demand_response() is False
+
+    def test_returns_false_no_events(self, ctrl):
+        thermostat = {"events": []}
+        with patch.object(ctrl, "_get_thermostat", return_value=thermostat):
+            assert ctrl.has_active_demand_response() is False
+
+    def test_returns_false_no_thermostat(self, ctrl):
+        with patch.object(ctrl, "_get_thermostat", return_value=None):
+            assert ctrl.has_active_demand_response() is False
+
+
 # ---------------------------------------------------------------------------
 # Hold helpers
 # ---------------------------------------------------------------------------

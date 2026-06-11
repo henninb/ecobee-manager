@@ -230,6 +230,16 @@ class TemperatureController:
         )
         return matches
 
+    def has_active_demand_response(self, thermostat_id: str | None = None) -> bool:
+        """Return True when the utility has an active demand-response event."""
+        thermostat = self._get_thermostat(thermostat_id)
+        if thermostat is None:
+            return False
+        return any(
+            e.get("running", False) and e.get("type") == "demandResponse"
+            for e in thermostat.get("events", [])
+        )
+
     # ------------------------------------------------------------------
     # Hold helpers
     # ------------------------------------------------------------------
