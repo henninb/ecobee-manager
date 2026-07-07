@@ -9,6 +9,7 @@ A Python service that automatically manages your Ecobee thermostat temperature b
 - Alternating `sleep`/`smart1` climate program pushed to Ecobee on startup and schedule changes
 - 60-minute temperature holds applied on each check cycle
 - Health check endpoint
+- Manual override web UI to pause enforcement for a specific date/time window
 - Automatic token refresh (re-login via Selenium when token expires)
 - Persistent rotating logs
 - SOPS-encrypted secrets support (`env.secrets.enc`) with plaintext fallback (`env.secrets`)
@@ -113,6 +114,7 @@ python ecobee_cli.py schedule-night --dry-run   # preview without applying
 ├── config/
 │   └── schedule.json          # Temperature schedule configuration (auto-filled if gaps exist)
 ├── ecobee_jwt.json            # JWT tokens (auto-generated)
+├── override.json              # Manual override window (auto-generated, set via web UI)
 ├── env.secrets                # Plaintext credentials (gitignored)
 ├── env.secrets.enc            # SOPS-encrypted credentials
 ├── logs/
@@ -121,7 +123,8 @@ python ecobee_cli.py schedule-night --dry-run   # preview without applying
 ├── ecobee_cli.py              # Command-line tool for manual thermostat control
 ├── ecobee_schedule_ui.py      # Selenium-based portal UI helper
 ├── ecobee_service.py          # Main service daemon
-├── health_server.py           # Health check endpoint (port 8080)
+├── health_server.py           # Health check + override web UI (port 8080)
+├── override_manager.py        # Persists the manual override window
 ├── schedule_engine.py         # Schedule parsing, gap-filling, and lookup
 ├── secrets_loader.py          # SOPS/plaintext secrets loader
 ├── temperature_controller.py  # Ecobee API calls (get/set temperature, climates, sensors)
@@ -149,6 +152,14 @@ The service exposes a health endpoint on port 8080:
 ```bash
 curl http://localhost:8080/health
 ```
+
+## Manual Override
+
+Open `https://ecobee.bhenning.com/override` in a browser to pause enforcement for a specific date/time window — during that window the service won't read or revert the thermostat, so any manual changes you make (via the Ecobee app or thermostat itself) stick. Only one override window is active at a time; setting a new one replaces the old one, and an expired override is cleared automatically on the next check.
+
+`ecobee.bhenning.com` is routed to this service by the shared `nginx-reverse-proxy` (see that repo's `nginx.conf` — `upstream ecobee` / `server_name ecobee.bhenning.com`), which must be rebuilt and redeployed once for the route to take effect. Until then, or as a fallback, use `kubectl port-forward -n default svc/ecobee-manager 8080:8080` and open `http://localhost:8080/override`.
+
+There's no login on this page, so treat that hostname as trusted-network-only.
 
 ## Troubleshooting
 

@@ -18,6 +18,7 @@ from logging.handlers import RotatingFileHandler
 
 from ecobee_auth_jwt import EcobeeAuthJWT
 from health_server import HealthServer
+from override_manager import OverrideManager
 from schedule_engine import ScheduleEngine
 from secrets_loader import load_secrets
 from temperature_controller import TemperatureController
@@ -38,6 +39,7 @@ class EcobeeServiceJWT:
         self.schedule: ScheduleEngine | None = None
         self.controller: TemperatureController | None = None
         self.health_server: HealthServer | None = None
+        self.override_manager: OverrideManager | None = None
 
         self.consecutive_errors = 0
         self.recent_reverts: deque[datetime] = deque(maxlen=60)
@@ -117,6 +119,7 @@ class EcobeeServiceJWT:
             return False
         if not self._init_controller():
             return False
+        self._init_override_manager()
         self._init_health_server()
 
         self.logger.info("All components initialized successfully")
@@ -182,9 +185,14 @@ class EcobeeServiceJWT:
         self.logger.info("Temperature controller initialized")
         return True
 
+    def _init_override_manager(self) -> None:
+        override_file = os.environ.get("OVERRIDE_FILE", "override.json")
+        self.override_manager = OverrideManager(override_file)
+        self.logger.info(f"Override manager initialized (file: {override_file})")
+
     def _init_health_server(self) -> None:
         self.logger.info("Starting health server...")
-        self.health_server = HealthServer(port=8080)
+        self.health_server = HealthServer(port=8080, override_manager=self.override_manager)
         self.health_server.update_schedule_status(True)
         self.health_server.update_token_status(
             True, self.auth.token_expires_at, None
@@ -271,6 +279,17 @@ class EcobeeServiceJWT:
         """Single iteration of temperature enforcement logic."""
         self._demand_response_active = False
         try:
+            if self.override_manager is not None:
+                override_status = self.override_manager.get_status()
+                if override_status["state"] == "active":
+                    self.logger.info(
+                        f"Manual override active until {override_status['end']} — "
+                        "skipping enforcement"
+                    )
+                    self.health_server.increment_checks()
+                    self.consecutive_errors = 0
+                    return
+
             current_file = self._select_schedule_file()
             if current_file != self.schedule.schedule_file:
                 self.logger.info(

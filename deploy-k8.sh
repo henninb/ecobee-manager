@@ -13,6 +13,7 @@ set -euo pipefail
 #
 # Storage strategy: hostPath volumes on debian-k8s-worker-01
 #   /opt/ecobee-manager/ecobee_jwt.json  — JWT token (persists across restarts)
+#   /opt/ecobee-manager/override.json    — manual override window (set via /override web UI)
 #   /opt/ecobee-manager/logs/            — rotating logs
 #
 # Note: subPath file mounts (PVC) are broken on this cluster's runc version;
@@ -89,6 +90,7 @@ info "Creating hostPath directories on $WORKER_NODE..."
 ssh "$WORKER_NODE" "
     sudo mkdir -p ${HOST_DATA_DIR}/logs &&
     sudo touch ${HOST_DATA_DIR}/ecobee_jwt.json &&
+    sudo touch ${HOST_DATA_DIR}/override.json &&
     sudo chown -R 1000:1000 ${HOST_DATA_DIR}
 "
 
@@ -207,6 +209,8 @@ spec:
           volumeMounts:
             - name: jwt
               mountPath: /app/ecobee_jwt.json
+            - name: override
+              mountPath: /app/override.json
             - name: logs
               mountPath: /app/logs
             - name: schedule
@@ -220,6 +224,10 @@ spec:
         - name: jwt
           hostPath:
             path: ${HOST_DATA_DIR}/ecobee_jwt.json
+            type: FileOrCreate
+        - name: override
+          hostPath:
+            path: ${HOST_DATA_DIR}/override.json
             type: FileOrCreate
         - name: logs
           hostPath:
@@ -266,6 +274,9 @@ kubectl get pods -n "$NAMESPACE" -o wide
 
 info ""
 info "To view logs:    kubectl logs -n $NAMESPACE -l app=$APP_NAME -f"
-info "To check health: kubectl port-forward -n $NAMESPACE svc/$APP_NAME 8080:8080"
-info "                 then: curl http://localhost:8080/health"
+info "To check health: curl https://ecobee.bhenning.com/health"
+info "To set an override: open https://ecobee.bhenning.com/override in a browser"
+info "  (requires the ecobee upstream/server block in nginx-reverse-proxy's nginx.conf"
+info "   to be built and deployed — see that repo)"
+info "Fallback via port-forward: kubectl port-forward -n $NAMESPACE svc/$APP_NAME 8080:8080"
 info "Data on worker:  ssh $WORKER_NODE ls -la $HOST_DATA_DIR"

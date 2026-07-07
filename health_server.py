@@ -8,9 +8,11 @@ import hmac
 import logging
 import os
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from flask import Flask, abort, jsonify, request
+from flask import Flask, abort, jsonify, redirect, render_template_string, request, url_for
+
+from override_manager import OverrideManager
 
 logger = logging.getLogger(__name__)
 
@@ -29,16 +31,213 @@ def _require_api_key(api_key: str | None):
     return decorator
 
 
+def _format_duration(delta: timedelta) -> str:
+    """Render a timedelta as a short human string, e.g. '2h 15m' or '3d 4h'."""
+    total_seconds = max(0, int(delta.total_seconds()))
+    if total_seconds < 60:
+        return "under a minute"
+    days, rem = divmod(total_seconds, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes = rem // 60
+    if days:
+        return f"{days}d {hours}h" if hours else f"{days}d"
+    if hours:
+        return f"{hours}h {minutes}m" if minutes else f"{hours}h"
+    return f"{minutes}m"
+
+
+_OVERRIDE_TEMPLATE = """
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ecobee Manager — Override</title>
+<style>
+  :root {
+    --bg: #14171c;
+    --panel: #1b2027;
+    --panel-border: #262c35;
+    --text: #e9ecf1;
+    --muted: #8992a3;
+    --ember: #ff8a3d;
+    --ember-dim: rgba(255, 138, 61, 0.14);
+    --teal: #4fd1c5;
+    --teal-dim: rgba(79, 209, 197, 0.14);
+    --danger: #ff6b6b;
+    --track: #262c35;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    margin: 0;
+    padding: 48px 20px;
+    display: flex;
+    justify-content: center;
+  }
+  main { width: 100%; max-width: 420px; }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin: 0 0 6px;
+  }
+  h1 { font-size: 24px; font-weight: 600; margin: 0 0 28px; letter-spacing: -0.01em; }
+  .banner {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--danger);
+    background: rgba(255, 107, 107, 0.1);
+    border: 1px solid rgba(255, 107, 107, 0.3);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin: 0 0 20px;
+  }
+  .card { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 12px; padding: 20px; }
+  .status-row { display: flex; align-items: center; gap: 10px; }
+  .led { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .led.enforcing { background: var(--ember); box-shadow: 0 0 0 4px var(--ember-dim); }
+  .led.paused { background: var(--teal); box-shadow: 0 0 0 4px var(--teal-dim); }
+  @media (prefers-reduced-motion: no-preference) {
+    .led.enforcing { animation: pulse-ember 2.6s ease-in-out infinite; }
+    .led.paused { animation: pulse-teal 2.6s ease-in-out infinite; }
+  }
+  @keyframes pulse-ember {
+    0%, 100% { box-shadow: 0 0 0 4px var(--ember-dim); }
+    50% { box-shadow: 0 0 0 8px var(--ember-dim); }
+  }
+  @keyframes pulse-teal {
+    0%, 100% { box-shadow: 0 0 0 4px var(--teal-dim); }
+    50% { box-shadow: 0 0 0 8px var(--teal-dim); }
+  }
+  .status-word {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .status-word.enforcing { color: var(--ember); }
+  .status-word.paused { color: var(--teal); }
+  .status-detail { margin: 10px 0 0; font-size: 14px; color: var(--muted); line-height: 1.5; }
+  .bar-track { margin-top: 16px; height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 3px; background: var(--teal); }
+  .bar-caption { margin: 8px 0 0; font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .card-actions { margin-top: 18px; }
+  h2 {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 600;
+    margin: 32px 0 12px;
+  }
+  .field-row { display: flex; flex-wrap: wrap; gap: 12px; }
+  .field { flex: 1 1 160px; display: flex; flex-direction: column; gap: 6px; }
+  label { font-size: 12px; color: var(--muted); }
+  input[type="datetime-local"] {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    color-scheme: dark;
+    width: 100%;
+  }
+  button {
+    font-family: var(--sans);
+    font-size: 14px;
+    font-weight: 600;
+    border: none;
+    border-radius: 8px;
+    padding: 11px 18px;
+    cursor: pointer;
+    margin-top: 16px;
+  }
+  .btn-pause { background: var(--teal); color: #0b1210; }
+  .btn-resume { background: var(--ember); color: #241300; }
+  .btn-pause:hover, .btn-resume:hover { filter: brightness(1.08); }
+  input:focus-visible, button:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+  p.hint { font-size: 13px; color: var(--muted); margin: 0 0 4px; }
+</style>
+</head>
+<body>
+<main>
+  <p class="eyebrow">Ecobee Manager</p>
+  <h1>Manual override</h1>
+
+  {% if error %}<p class="banner">{{ error }}</p>{% endif %}
+
+  <div class="card">
+    <div class="status-row">
+      <span class="led {{ badge_class }}"></span>
+      <span class="status-word {{ badge_class }}">{{ status_label }}</span>
+    </div>
+
+    {% if state == 'active' %}
+      <p class="status-detail">Paused until {{ end_human }}. The thermostat won't be touched until then.</p>
+      <div class="bar-track"><div class="bar-fill" style="width: {{ percent }}%"></div></div>
+      <p class="bar-caption">{{ caption }}</p>
+      <div class="card-actions">
+        <form method="post" action="{{ url_for('override_cancel') }}">
+          <button type="submit" class="btn-resume">Resume schedule now</button>
+        </form>
+      </div>
+    {% elif state == 'upcoming' %}
+      <p class="status-detail">Pausing from {{ start_human }} to {{ end_human }}.</p>
+      <div class="bar-track"><div class="bar-fill" style="width: 0%"></div></div>
+      <p class="bar-caption">{{ caption }}</p>
+      <div class="card-actions">
+        <form method="post" action="{{ url_for('override_cancel') }}">
+          <button type="submit" class="btn-resume">Cancel scheduled pause</button>
+        </form>
+      </div>
+    {% else %}
+      <p class="status-detail">Automatic enforcement is running normally.</p>
+    {% endif %}
+  </div>
+
+  <h2>Pause the schedule</h2>
+  <p class="hint">The thermostat won't be adjusted during this window.</p>
+  <form method="post" action="{{ url_for('override_submit') }}">
+    <div class="field-row">
+      <div class="field">
+        <label for="start">From</label>
+        <input id="start" type="datetime-local" name="start" value="{{ now_value }}" required>
+      </div>
+      <div class="field">
+        <label for="end">Until</label>
+        <input id="end" type="datetime-local" name="end" required>
+      </div>
+    </div>
+    <button type="submit" class="btn-pause">Pause schedule</button>
+  </form>
+</main>
+</body>
+</html>
+"""
+
+
 class HealthServer:
     """HTTP server for health monitoring, exposed on a background thread."""
 
-    def __init__(self, port: int = 8080) -> None:
+    def __init__(self, port: int = 8080, override_manager: OverrideManager | None = None) -> None:
         self.port = port
         self.app = Flask(__name__)
         self._server_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._api_key = os.environ.get("HEALTH_API_KEY")
         self._lock = threading.Lock()
+        self.override_manager = override_manager
 
         self.start_time = datetime.now(timezone.utc)
         self.stats: dict = {
@@ -74,7 +273,13 @@ class HealthServer:
             response.headers["X-Frame-Options"] = "DENY"
             response.headers["Cache-Control"] = "no-store"
             response.headers["Referrer-Policy"] = "no-referrer"
-            response.headers["Content-Security-Policy"] = "default-src 'none'"
+            if response.content_type.startswith("text/html"):
+                # The /override page needs an inline <style> block; still no scripts.
+                response.headers["Content-Security-Policy"] = (
+                    "default-src 'self'; style-src 'unsafe-inline'; script-src 'none'"
+                )
+            else:
+                response.headers["Content-Security-Policy"] = "default-src 'none'"
             return response
 
         @self.app.route("/health", methods=["GET"])
@@ -173,6 +378,72 @@ class HealthServer:
                 "revert_rate": round(reverts / checks * 100, 2) if checks else 0,
                 "error_rate": round(errors / checks * 100, 2) if checks else 0,
             })
+
+        @self.app.route("/override", methods=["GET"])
+        def override_page():
+            context = self._override_context()
+            return render_template_string(
+                _OVERRIDE_TEMPLATE, error=request.args.get("error"), **context
+            )
+
+        @self.app.route("/override", methods=["POST"])
+        def override_submit():
+            if self.override_manager is None:
+                abort(404)
+            try:
+                start = datetime.strptime(request.form.get("start", ""), "%Y-%m-%dT%H:%M")
+                end = datetime.strptime(request.form.get("end", ""), "%Y-%m-%dT%H:%M")
+            except ValueError:
+                return redirect(
+                    url_for("override_page", error="Enter a valid start and end date/time.")
+                )
+            try:
+                self.override_manager.set_override(start, end)
+            except ValueError as e:
+                return redirect(url_for("override_page", error=str(e)))
+            return redirect(url_for("override_page"))
+
+        @self.app.route("/override/cancel", methods=["POST"])
+        def override_cancel():
+            if self.override_manager is None:
+                abort(404)
+            self.override_manager.clear_override()
+            return redirect(url_for("override_page"))
+
+    # ------------------------------------------------------------------
+    # Override page helpers
+    # ------------------------------------------------------------------
+
+    def _override_context(self) -> dict:
+        """Build the template context for the /override page."""
+        now = datetime.now()
+        status = self.override_manager.get_status(now) if self.override_manager else {"state": "none"}
+        state = status["state"]
+        context: dict = {"state": state, "now_value": now.strftime("%Y-%m-%dT%H:%M")}
+
+        if state == "none":
+            context["badge_class"] = "enforcing"
+            context["status_label"] = "Schedule active"
+            return context
+
+        start, end = status["start"], status["end"]
+        context["badge_class"] = "paused"
+        context["start_human"] = start.strftime("%a %b %-d, %-I:%M %p")
+        context["end_human"] = end.strftime("%a %b %-d, %-I:%M %p")
+
+        if state == "active":
+            total = (end - start).total_seconds()
+            elapsed = (now - start).total_seconds()
+            context["status_label"] = "Schedule paused"
+            context["percent"] = max(0, min(100, int(elapsed / total * 100))) if total > 0 else 100
+            context["caption"] = f"Ends in {_format_duration(end - now)}"
+        else:
+            context["status_label"] = "Pause scheduled"
+            context["caption"] = (
+                f"Starts in {_format_duration(start - now)}, runs {_format_duration(end - start)}"
+            )
+
+        return context
 
     # ------------------------------------------------------------------
     # State mutators (called from the service loop)

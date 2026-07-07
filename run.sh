@@ -8,7 +8,7 @@ ECOBEE_EMAIL=$(gopass show ecobee/email)
 ECOBEE_PASSWORD=$(gopass show ecobee/password)
 
 # Ensure host-side files and directories exist
-touch ecobee_jwt.json
+touch ecobee_jwt.json override.json
 mkdir -p logs config
 
 # Stop and remove existing container if running
@@ -35,6 +35,7 @@ docker run -d \
   --env SELENIUM_TIMEOUT="${SELENIUM_TIMEOUT:-30}" \
   --env SELENIUM_REDIRECT_TIMEOUT="${SELENIUM_REDIRECT_TIMEOUT:-60}" \
   -v "$(pwd)/ecobee_jwt.json:/app/ecobee_jwt.json" \
+  -v "$(pwd)/override.json:/app/override.json" \
   -v "$(pwd)/logs:/app/logs" \
   -v "$(pwd)/config:/app/config:ro" \
   "${IMAGE}"

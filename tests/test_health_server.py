@@ -1,9 +1,10 @@
 import os
 from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from health_server import HealthServer, _require_api_key
+from health_server import HealthServer, _format_duration, _require_api_key
 
 
 @pytest.fixture(autouse=True)
@@ -230,3 +231,159 @@ class TestApiKeyProtection:
 
         with app.test_client() as c:
             assert c.get("/t").status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# /override
+# ---------------------------------------------------------------------------
+
+class TestOverridePage:
+    def test_get_without_manager_shows_enforcing(self, server, client):
+        resp = client.get("/override")
+        assert resp.status_code == 200
+        assert b"Schedule active" in resp.data
+
+    def test_get_with_active_override(self, server, client):
+        now = datetime(2026, 7, 10, 12, 0, 0)
+        server.override_manager = MagicMock()
+        server.override_manager.get_status.return_value = {
+            "state": "active",
+            "start": now - timedelta(hours=2),
+            "end": now + timedelta(hours=2),
+        }
+        resp = client.get("/override")
+        body = resp.get_data(as_text=True)
+        assert "Schedule paused" in body
+        assert "Resume schedule now" in body
+
+    def test_get_with_upcoming_override(self, server, client):
+        now = datetime(2026, 7, 10, 12, 0, 0)
+        server.override_manager = MagicMock()
+        server.override_manager.get_status.return_value = {
+            "state": "upcoming",
+            "start": now + timedelta(hours=1),
+            "end": now + timedelta(hours=3),
+        }
+        resp = client.get("/override")
+        body = resp.get_data(as_text=True)
+        assert "Pause scheduled" in body
+        assert "Cancel scheduled pause" in body
+
+    def test_get_with_no_override_hides_cancel_buttons(self, server, client):
+        server.override_manager = MagicMock()
+        server.override_manager.get_status.return_value = {"state": "none"}
+        resp = client.get("/override")
+        body = resp.get_data(as_text=True)
+        assert "Resume schedule now" not in body
+        assert "Cancel scheduled pause" not in body
+
+    def test_html_response_has_relaxed_csp(self, server, client):
+        resp = client.get("/override")
+        assert "script-src 'none'" in resp.headers["Content-Security-Policy"]
+
+    def test_json_response_keeps_strict_csp(self, server, client):
+        resp = client.get("/health")
+        assert resp.headers["Content-Security-Policy"] == "default-src 'none'"
+
+    def test_post_without_manager_404s(self, server, client):
+        resp = client.post("/override", data={"start": "2026-07-10T10:00", "end": "2026-07-10T14:00"})
+        assert resp.status_code == 404
+
+    def test_post_sets_override(self, server, client):
+        server.override_manager = MagicMock()
+        resp = client.post(
+            "/override",
+            data={"start": "2026-07-10T10:00", "end": "2026-07-10T14:00"},
+        )
+        assert resp.status_code == 302
+        assert resp.headers["Location"].endswith("/override")
+        server.override_manager.set_override.assert_called_once_with(
+            datetime(2026, 7, 10, 10, 0), datetime(2026, 7, 10, 14, 0)
+        )
+
+    def test_post_invalid_range_redirects_with_error(self, server, client):
+        server.override_manager = MagicMock()
+        server.override_manager.set_override.side_effect = ValueError("End time must be after start time")
+        resp = client.post(
+            "/override",
+            data={"start": "2026-07-10T14:00", "end": "2026-07-10T10:00"},
+        )
+        assert resp.status_code == 302
+        assert "error=" in resp.headers["Location"]
+
+    def test_post_malformed_datetime_redirects_with_error(self, server, client):
+        server.override_manager = MagicMock()
+        resp = client.post("/override", data={"start": "not-a-date", "end": "2026-07-10T10:00"})
+        assert resp.status_code == 302
+        assert "error=" in resp.headers["Location"]
+
+    def test_cancel_without_manager_404s(self, server, client):
+        assert client.post("/override/cancel").status_code == 404
+
+    def test_cancel_clears_override(self, server, client):
+        server.override_manager = MagicMock()
+        resp = client.post("/override/cancel")
+        assert resp.status_code == 302
+        server.override_manager.clear_override.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _format_duration
+# ---------------------------------------------------------------------------
+
+class TestFormatDuration:
+    def test_minutes_only(self):
+        assert _format_duration(timedelta(minutes=15)) == "15m"
+
+    def test_under_a_minute(self):
+        assert _format_duration(timedelta(seconds=30)) == "under a minute"
+
+    def test_hours_and_minutes(self):
+        assert _format_duration(timedelta(hours=2, minutes=15)) == "2h 15m"
+
+    def test_exact_hours(self):
+        assert _format_duration(timedelta(hours=3)) == "3h"
+
+    def test_days_and_hours(self):
+        assert _format_duration(timedelta(days=2, hours=4)) == "2d 4h"
+
+    def test_exact_days(self):
+        assert _format_duration(timedelta(days=5)) == "5d"
+
+    def test_negative_clamped_to_zero(self):
+        assert _format_duration(timedelta(seconds=-100)) == "under a minute"
+
+
+# ---------------------------------------------------------------------------
+# _override_context (duration bar math)
+# ---------------------------------------------------------------------------
+
+class TestOverrideContext:
+    def test_active_percent_and_caption(self, server):
+        now = datetime(2026, 7, 10, 12, 0, 0)
+        server.override_manager = MagicMock()
+        server.override_manager.get_status.return_value = {
+            "state": "active",
+            "start": now - timedelta(hours=1),
+            "end": now + timedelta(hours=3),
+        }
+        with patch("health_server.datetime") as mock_dt:
+            mock_dt.now.return_value = now
+            mock_dt.strptime = datetime.strptime
+            context = server._override_context()
+        assert context["percent"] == 25
+        assert context["caption"] == "Ends in 3h"
+
+    def test_upcoming_caption(self, server):
+        now = datetime(2026, 7, 10, 12, 0, 0)
+        server.override_manager = MagicMock()
+        server.override_manager.get_status.return_value = {
+            "state": "upcoming",
+            "start": now + timedelta(hours=1),
+            "end": now + timedelta(hours=4),
+        }
+        with patch("health_server.datetime") as mock_dt:
+            mock_dt.now.return_value = now
+            mock_dt.strptime = datetime.strptime
+            context = server._override_context()
+        assert context["caption"] == "Starts in 1h, runs 3h"

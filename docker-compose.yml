@@ -21,6 +21,9 @@ services:
       # Persist JWT token
       - ./ecobee_jwt.json:/app/ecobee_jwt.json
 
+      # Persist manual override window (set via the /override web UI)
+      - ./override.json:/app/override.json
+
       # Persist logs
       - ./logs:/app/logs
 

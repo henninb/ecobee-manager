@@ -25,6 +25,7 @@ def svc():
     s.schedule = MagicMock()
     s.controller = MagicMock()
     s.health_server = MagicMock()
+    s.override_manager = None
     s.consecutive_errors = 0
     s.recent_reverts = deque(maxlen=60)
     s._demand_response_active = False
@@ -108,6 +109,44 @@ class TestDemandResponseLogic:
         with patch.object(svc, "_select_schedule_file", return_value="config/schedule_summer.json"):
             svc._check_and_update_temperature()
         assert svc._demand_response_active is False
+
+
+# ---------------------------------------------------------------------------
+# Manual override (_check_and_update_temperature)
+# ---------------------------------------------------------------------------
+
+class TestManualOverride:
+    def test_active_override_skips_enforcement(self, svc):
+        """An active override skips the check entirely — no reads, no reverts."""
+        svc.override_manager = MagicMock()
+        svc.override_manager.get_status.return_value = {
+            "state": "active", "start": "x", "end": "2026-07-10T12:00:00"
+        }
+        with patch.object(svc, "_select_schedule_file"):
+            svc._check_and_update_temperature()
+        svc.controller.get_current_temperature_setting.assert_not_called()
+        svc.controller.set_temperature_for_mode.assert_not_called()
+        svc.health_server.increment_checks.assert_called_once()
+
+    def test_upcoming_override_does_not_skip(self, svc):
+        """A scheduled-but-not-yet-started override doesn't pause enforcement."""
+        svc.override_manager = MagicMock()
+        svc.override_manager.get_status.return_value = {
+            "state": "upcoming", "start": "x", "end": "y"
+        }
+        _setup_cooling_check(svc, current_temp=78, dr_active=False)
+        with patch.object(svc, "_select_schedule_file", return_value="config/schedule_summer.json"):
+            svc._check_and_update_temperature()
+        svc.controller.set_temperature_for_mode.assert_called_once_with(74, "cooling")
+
+    def test_no_override_does_not_skip(self, svc):
+        """No override at all → normal enforcement."""
+        svc.override_manager = MagicMock()
+        svc.override_manager.get_status.return_value = {"state": "none"}
+        _setup_cooling_check(svc, current_temp=78, dr_active=False)
+        with patch.object(svc, "_select_schedule_file", return_value="config/schedule_summer.json"):
+            svc._check_and_update_temperature()
+        svc.controller.set_temperature_for_mode.assert_called_once_with(74, "cooling")
 
 
 # ---------------------------------------------------------------------------

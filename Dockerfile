@@ -11,6 +11,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tzdata \
     && rm -rf /var/lib/apt/lists/*
 
+# Debian trixie's current chromium (150.0.7871.46-1~deb13u1) crashes on startup
+# with SIGILL/UD2 in the browser process on this deployment's host — confirmed
+# by bisecting against 149.0.7827.196-1~deb13u1, which runs cleanly. Downgrade
+# in place until a working trixie chromium build is available.
+RUN cd /tmp && \
+    wget -q -O chromium-sandbox.deb https://snapshot.debian.org/file/52dbf5c3edb4e7e4e2ea6e10b655f738fb962617 && \
+    wget -q -O chromium-common.deb https://snapshot.debian.org/file/baabe01daaf628d599e14cf331d8b7cd1453e384 && \
+    wget -q -O chromium.deb https://snapshot.debian.org/file/122a1721a282240e07dcc9f8f769d0a40361b789 && \
+    wget -q -O chromium-driver.deb https://snapshot.debian.org/file/c1db873fb82b0925cc54bc63a0755b635af8cf4d && \
+    dpkg -i chromium-sandbox.deb chromium-common.deb chromium.deb chromium-driver.deb && \
+    rm -f /tmp/*.deb
+
 # Copy requirements first for better caching
 COPY requirements.txt .
 
@@ -21,6 +33,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY ecobee_auth_jwt.py .
 COPY ecobee_service.py .
 COPY health_server.py .
+COPY override_manager.py .
 COPY schedule_engine.py .
 COPY secrets_loader.py .
 COPY temperature_controller.py .
@@ -29,7 +42,7 @@ COPY temperature_controller.py .
 RUN groupadd -g 1000 ecobee && useradd -u 1000 -g ecobee -d /app -s /sbin/nologin ecobee
 
 # Create necessary directories and placeholder for JWT token
-RUN mkdir -p config logs .cache/selenium && touch ecobee_jwt.json && chown -R ecobee:ecobee /app
+RUN mkdir -p config logs .cache/selenium && touch ecobee_jwt.json override.json && chown -R ecobee:ecobee /app
 
 USER ecobee
 
