@@ -130,6 +130,7 @@ _OVERRIDE_TEMPLATE = """
   .bar-fill { height: 100%; border-radius: 3px; background: var(--teal); }
   .bar-caption { margin: 8px 0 0; font-family: var(--mono); font-size: 12px; color: var(--muted); }
   .card-actions { margin-top: 18px; }
+  .override-list { display: flex; flex-direction: column; gap: 12px; margin-bottom: 8px; }
   h2 {
     font-family: var(--mono);
     font-size: 12px;
@@ -182,32 +183,47 @@ _OVERRIDE_TEMPLATE = """
       <span class="led {{ badge_class }}"></span>
       <span class="status-word {{ badge_class }}">{{ status_label }}</span>
     </div>
-
-    {% if state == 'active' %}
-      <p class="status-detail">Paused until {{ end_human }}. The thermostat won't be touched until then.</p>
-      <div class="bar-track"><div class="bar-fill" style="width: {{ percent }}%"></div></div>
-      <p class="bar-caption">{{ caption }}</p>
-      <div class="card-actions">
-        <form method="post" action="{{ url_for('override_cancel') }}">
-          <button type="submit" class="btn-resume">Resume schedule now</button>
-        </form>
-      </div>
-    {% elif state == 'upcoming' %}
-      <p class="status-detail">Pausing from {{ start_human }} to {{ end_human }}.</p>
-      <div class="bar-track"><div class="bar-fill" style="width: 0%"></div></div>
-      <p class="bar-caption">{{ caption }}</p>
-      <div class="card-actions">
-        <form method="post" action="{{ url_for('override_cancel') }}">
-          <button type="submit" class="btn-resume">Cancel scheduled pause</button>
-        </form>
-      </div>
-    {% else %}
+    {% if not overrides %}
       <p class="status-detail">Automatic enforcement is running normally.</p>
     {% endif %}
   </div>
 
-  <h2>Pause the schedule</h2>
-  <p class="hint">The thermostat won't be adjusted during this window.</p>
+  {% if overrides %}
+  <h2>Scheduled pauses</h2>
+  <div class="override-list">
+    {% for o in overrides %}
+    <div class="card">
+      <div class="status-row">
+        <span class="led {{ 'paused' if o.state == 'active' else 'enforcing' }}"></span>
+        <span class="status-word {{ 'paused' if o.state == 'active' else 'enforcing' }}">
+          {{ 'Active now' if o.state == 'active' else 'Upcoming' }}
+        </span>
+      </div>
+      {% if o.state == 'active' %}
+        <p class="status-detail">Paused until {{ o.end_human }}. The thermostat won't be touched until then.</p>
+        <div class="bar-track"><div class="bar-fill" style="width: {{ o.percent }}%"></div></div>
+        <p class="bar-caption">{{ o.caption }}</p>
+      {% else %}
+        <p class="status-detail">Pausing from {{ o.start_human }} to {{ o.end_human }}.</p>
+        <p class="bar-caption">{{ o.caption }}</p>
+      {% endif %}
+      <div class="card-actions">
+        <form method="post" action="{{ url_for('override_cancel_one', override_id=o.id) }}">
+          <button type="submit" class="btn-resume">Cancel this pause</button>
+        </form>
+      </div>
+    </div>
+    {% endfor %}
+    {% if overrides|length > 1 %}
+    <form method="post" action="{{ url_for('override_cancel_all') }}">
+      <button type="submit" class="btn-resume">Cancel all</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <h2>Schedule a pause</h2>
+  <p class="hint">The thermostat won't be adjusted during this window. You can schedule more than one.</p>
   <form method="post" action="{{ url_for('override_submit') }}">
     <div class="field-row">
       <div class="field">
@@ -219,7 +235,7 @@ _OVERRIDE_TEMPLATE = """
         <input id="end" type="datetime-local" name="end" required>
       </div>
     </div>
-    <button type="submit" class="btn-pause">Pause schedule</button>
+    <button type="submit" class="btn-pause">Schedule pause</button>
   </form>
 </main>
 </body>
@@ -398,16 +414,23 @@ class HealthServer:
                     url_for("override_page", error="Enter a valid start and end date/time.")
                 )
             try:
-                self.override_manager.set_override(start, end)
+                self.override_manager.add_override(start, end)
             except ValueError as e:
                 return redirect(url_for("override_page", error=str(e)))
             return redirect(url_for("override_page"))
 
         @self.app.route("/override/cancel", methods=["POST"])
-        def override_cancel():
+        def override_cancel_all():
             if self.override_manager is None:
                 abort(404)
             self.override_manager.clear_override()
+            return redirect(url_for("override_page"))
+
+        @self.app.route("/override/cancel/<override_id>", methods=["POST"])
+        def override_cancel_one(override_id: str):
+            if self.override_manager is None:
+                abort(404)
+            self.override_manager.remove_override(override_id)
             return redirect(url_for("override_page"))
 
     # ------------------------------------------------------------------
@@ -417,31 +440,33 @@ class HealthServer:
     def _override_context(self) -> dict:
         """Build the template context for the /override page."""
         now = datetime.now()
-        status = self.override_manager.get_status(now) if self.override_manager else {"state": "none"}
-        state = status["state"]
-        context: dict = {"state": state, "now_value": now.strftime("%Y-%m-%dT%H:%M")}
+        windows = self.override_manager.list_overrides(now) if self.override_manager else []
+        paused_now = any(w["state"] == "active" for w in windows)
+        context: dict = {
+            "now_value": now.strftime("%Y-%m-%dT%H:%M"),
+            "badge_class": "paused" if paused_now else "enforcing",
+            "status_label": "Schedule paused" if paused_now else "Schedule active",
+            "overrides": [],
+        }
 
-        if state == "none":
-            context["badge_class"] = "enforcing"
-            context["status_label"] = "Schedule active"
-            return context
-
-        start, end = status["start"], status["end"]
-        context["badge_class"] = "paused"
-        context["start_human"] = start.strftime("%a %b %-d, %-I:%M %p")
-        context["end_human"] = end.strftime("%a %b %-d, %-I:%M %p")
-
-        if state == "active":
-            total = (end - start).total_seconds()
-            elapsed = (now - start).total_seconds()
-            context["status_label"] = "Schedule paused"
-            context["percent"] = max(0, min(100, int(elapsed / total * 100))) if total > 0 else 100
-            context["caption"] = f"Ends in {_format_duration(end - now)}"
-        else:
-            context["status_label"] = "Pause scheduled"
-            context["caption"] = (
-                f"Starts in {_format_duration(start - now)}, runs {_format_duration(end - start)}"
-            )
+        for w in windows:
+            start, end = w["start"], w["end"]
+            item: dict = {
+                "id": w["id"],
+                "state": w["state"],
+                "start_human": start.strftime("%a %b %-d, %-I:%M %p"),
+                "end_human": end.strftime("%a %b %-d, %-I:%M %p"),
+            }
+            if w["state"] == "active":
+                total = (end - start).total_seconds()
+                elapsed = (now - start).total_seconds()
+                item["percent"] = max(0, min(100, int(elapsed / total * 100))) if total > 0 else 100
+                item["caption"] = f"Ends in {_format_duration(end - now)}"
+            else:
+                item["caption"] = (
+                    f"Starts in {_format_duration(start - now)}, runs {_format_duration(end - start)}"
+                )
+            context["overrides"].append(item)
 
         return context
 
