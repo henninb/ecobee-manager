@@ -23,6 +23,14 @@ from schedule_engine import ScheduleEngine
 from secrets_loader import load_secrets
 from temperature_controller import TemperatureController
 
+# Holds must outlast the check interval by a comfortable margin so a single
+# missed/failed check (API hiccup, token refresh, etc.) can't let the hold
+# expire and the thermostat drift back to its onboard climate program before
+# the next check corrects it.
+_HOLD_MARGIN_MULTIPLIER = 3
+
+_TEMP_FACTOR = 10  # Ecobee stores setpoints as °F × 10
+
 
 class EcobeeServiceJWT:
     """Daemon that enforces thermostat setpoints from a local schedule."""
@@ -47,6 +55,11 @@ class EcobeeServiceJWT:
 
         self._setup_logging()
         self._setup_signal_handlers()
+
+    @property
+    def hold_duration_minutes(self) -> int:
+        """Hold length to request, with margin over the check interval."""
+        return self.check_interval_minutes * _HOLD_MARGIN_MULTIPLIER
 
     # ------------------------------------------------------------------
     # Setup
@@ -275,6 +288,46 @@ class EcobeeServiceJWT:
     # Main loop helpers
     # ------------------------------------------------------------------
 
+    def _climate_program_matches_schedule(self) -> bool:
+        """Return True when the thermostat's climate program already reflects
+        the schedule config, so a re-push can be skipped.
+
+        Catches drift caused by changes made outside this service (e.g. a
+        "permanent" temperature change made at the thermostat or app), which
+        the per-cycle hold enforcement never touches since it only manages
+        the temporary hold, not the underlying weekly climate program.
+        """
+        info = self.controller.get_climate_sensor_info()
+        if info is None:
+            return True
+
+        climates = {c.get("climateRef"): c for c in info.get("climates", [])}
+        windows = self.schedule.get_windows()
+
+        if self.schedule.mode == "cooling":
+            day = next((w for w in windows if w.name == "day" and w.enabled), None)
+            night = next((w for w in windows if w.name == "night" and w.enabled), None)
+            if not day or not night:
+                return True
+            day_ecobee = day.temperature * _TEMP_FACTOR
+            night_ecobee = night.temperature * _TEMP_FACTOR
+            for ref in ("home", "away"):
+                climate = climates.get(ref)
+                if climate is not None and climate.get("coolTemp") != day_ecobee:
+                    return False
+            sleep = climates.get("sleep")
+            if sleep is not None and sleep.get("coolTemp") != night_ecobee:
+                return False
+            return True
+
+        night = next((w for w in windows if w.enabled), None)
+        if not night:
+            return True
+        sleep = climates.get("sleep")
+        if sleep is not None and sleep.get("heatTemp") != night.temperature * _TEMP_FACTOR:
+            return False
+        return True
+
     def _check_and_update_temperature(self) -> None:
         """Single iteration of temperature enforcement logic."""
         self._demand_response_active = False
@@ -300,6 +353,12 @@ class EcobeeServiceJWT:
                 self.schedule.load_schedule()
                 self._apply_ecobee_program()
             elif self.schedule.check_for_updates():
+                self._apply_ecobee_program()
+            elif not self._climate_program_matches_schedule():
+                self.logger.warning(
+                    "Climate program on thermostat has drifted from schedule "
+                    "config — reapplying"
+                )
                 self._apply_ecobee_program()
 
             expected_temp = self.schedule.get_expected_temperature()
@@ -347,7 +406,10 @@ class EcobeeServiceJWT:
                 self.logger.warning(
                     f"Mismatch: expected {expected_temp}°F, found {current_temp}°F"
                 )
-                if self.controller.set_temperature_for_mode(expected_temp, self.schedule.mode):
+                if self.controller.set_temperature_for_mode(
+                    expected_temp, self.schedule.mode,
+                    duration_minutes=self.hold_duration_minutes,
+                ):
                     self.logger.info(f"Reverted temperature to {expected_temp}°F")
                     self.health_server.increment_reverts()
                     self.recent_reverts.append(datetime.now(timezone.utc))

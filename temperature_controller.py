@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 from typing import Any
 
@@ -252,7 +253,10 @@ class TemperatureController:
         duration_minutes: int,
     ) -> bool:
         """Send a setHold function call for thermostat *tid*."""
-        hold_hours = max(1, duration_minutes // 60)
+        # Round up so the hold always covers at least duration_minutes — the
+        # Ecobee API only accepts whole-hour holds, and floor division could
+        # let the hold expire before the caller's requested coverage ends.
+        hold_hours = max(1, math.ceil(duration_minutes / 60))
         body = {
             "selection": {"selectionType": "thermostats", "selectionMatch": tid},
             "functions": [{
